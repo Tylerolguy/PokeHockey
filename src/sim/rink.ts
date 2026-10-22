@@ -16,11 +16,30 @@ export const RINK_ICE: RoundedRect = {
   cornerRadius: 205,
 };
 
-/** Solid net frames, from the back of the net to the goal line. */
+/** Net frames, from the back of the net to the goal line. Skaters treat these as solid. */
 export const RINK_NETS: Rect[] = [
   { left: 186, top: 390, right: 246, bottom: 536 },
   { left: 1424, top: 390, right: 1486, bottom: 536 },
 ];
+
+const NET_WALL_THICKNESS = 6;
+
+/**
+ * The back and side walls of each net, leaving the front (goal line side, facing center ice)
+ * open so the puck can go in.
+ */
+export const RINK_NET_WALLS: Rect[] = RINK_NETS.flatMap((net) => {
+  const opensRight = (net.left + net.right) / 2 < RINK_WIDTH / 2;
+  const back = opensRight
+    ? { left: net.left, right: net.left + NET_WALL_THICKNESS }
+    : { left: net.right - NET_WALL_THICKNESS, right: net.right };
+
+  return [
+    { ...back, top: net.top, bottom: net.bottom },
+    { left: net.left, right: net.right, top: net.top, bottom: net.top + NET_WALL_THICKNESS },
+    { left: net.left, right: net.right, top: net.bottom - NET_WALL_THICKNESS, bottom: net.bottom },
+  ];
+});
 
 export const BOARD_RESTITUTION = 0.35;
 export const NET_RESTITUTION = 0.2;

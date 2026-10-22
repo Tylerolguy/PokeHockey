@@ -88,6 +88,36 @@ export function pushOutOfRect(body: CircleBody, rect: Rect, restitution: number)
   return true;
 }
 
+/**
+ * Separates two overlapping circles, treating `heavy` as immovable: `light` is pushed out and
+ * bounces off `heavy`'s velocity. Returns the unit normal from heavy to light, or undefined if apart.
+ */
+export function resolveCircleHit(heavy: CircleBody, light: CircleBody, restitution: number): Vec2 | undefined {
+  const dx = light.position.x - heavy.position.x;
+  const dy = light.position.y - heavy.position.y;
+  const minDistance = heavy.radius + light.radius;
+  const distance = Math.hypot(dx, dy);
+
+  if (distance >= minDistance) {
+    return undefined;
+  }
+
+  // Exactly on top of each other: pick any direction.
+  const normal = distance > 0 ? { x: dx / distance, y: dy / distance } : { x: 1, y: 0 };
+  light.position.x = heavy.position.x + normal.x * minDistance;
+  light.position.y = heavy.position.y + normal.y * minDistance;
+
+  const closingSpeed =
+    (light.velocity.x - heavy.velocity.x) * normal.x + (light.velocity.y - heavy.velocity.y) * normal.y;
+
+  if (closingSpeed < 0) {
+    light.velocity.x -= (1 + restitution) * closingSpeed * normal.x;
+    light.velocity.y -= (1 + restitution) * closingSpeed * normal.y;
+  }
+
+  return normal;
+}
+
 /** Reflects the part of the velocity heading along `wallNormal` (pointing into the wall). */
 function bounceOff(body: CircleBody, wallNormal: Vec2, restitution: number): void {
   const intoWall = body.velocity.x * wallNormal.x + body.velocity.y * wallNormal.y;

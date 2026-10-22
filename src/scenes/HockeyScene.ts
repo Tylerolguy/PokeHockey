@@ -7,8 +7,9 @@ import {
   loadPokemonModel,
   type PokemonDirection,
 } from '../pokemon/pokemonSprites';
-import { Skater } from '../sim/Skater';
-import { RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RINK_ICE, RINK_NETS, RINK_WIDTH } from '../sim/rink';
+import { HockeyEngine } from '../sim/HockeyEngine';
+import { PUCK_RADIUS } from '../sim/Puck';
+import { RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RINK_ICE, RINK_NET_WALLS, RINK_NETS } from '../sim/rink';
 
 const PLAYER_MODEL = 'Garchomp';
 const SPRITE_SCALE = 1.7;
@@ -16,8 +17,9 @@ const SPRITE_SCALE = 1.7;
 const WALK_ANIMATION_MIN_SPEED = 25;
 
 export class HockeyScene extends Phaser.Scene {
-  private skater!: Skater;
+  private engine!: HockeyEngine;
   private sprite!: Phaser.GameObjects.Sprite;
+  private puckSprite!: Phaser.GameObjects.Graphics;
   private moveKeys!: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
   private boundsDebug!: Phaser.GameObjects.Graphics;
   private facing: PokemonDirection = 2;
@@ -36,9 +38,11 @@ export class HockeyScene extends Phaser.Scene {
     this.boundsDebug = this.drawBounds();
 
     createPokemonAnimations(this, PLAYER_MODEL);
-    this.skater = new Skater({ x: RINK_WIDTH / 2, y: RINK_HEIGHT / 2 });
-    this.sprite = this.add.sprite(this.skater.position.x, this.skater.position.y, getPokemonTextureKey(PLAYER_MODEL));
+    this.engine = new HockeyEngine();
+    this.puckSprite = this.drawPuck();
+    this.sprite = this.add.sprite(0, 0, getPokemonTextureKey(PLAYER_MODEL));
     this.sprite.setScale(SPRITE_SCALE);
+    this.syncSprites();
 
     const keyboard = this.input.keyboard!;
     this.moveKeys = keyboard.addKeys({ up: 'W', down: 'S', left: 'A', right: 'D' }) as typeof this.moveKeys;
@@ -61,16 +65,33 @@ export class HockeyScene extends Phaser.Scene {
       y: Number(this.moveKeys.down.isDown) - Number(this.moveKeys.up.isDown),
     };
 
-    // Clamp long frames (tab switches) so the skater can't tunnel through the boards.
-    this.skater.update(input, Math.min(deltaMs, 50) / 1000);
+    this.engine.update(input, deltaMs / 1000);
 
     if (input.x !== 0 || input.y !== 0) {
       this.facing = getDirectionFromVector(input.x, input.y);
     }
 
-    const state = this.skater.speed > WALK_ANIMATION_MIN_SPEED ? 'Walk' : 'Idle';
+    const state = this.engine.skater.speed > WALK_ANIMATION_MIN_SPEED ? 'Walk' : 'Idle';
     this.sprite.play(getPokemonAnimationKey(PLAYER_MODEL, state, this.facing), true);
-    this.sprite.setPosition(this.skater.position.x, this.skater.position.y);
+    this.syncSprites();
+  }
+
+  private syncSprites(): void {
+    const { skater, puck } = this.engine;
+    this.sprite.setPosition(skater.position.x, skater.position.y);
+    this.puckSprite.setPosition(puck.position.x, puck.position.y);
+  }
+
+  private drawPuck(): Phaser.GameObjects.Graphics {
+    const graphics = this.add.graphics();
+    graphics.fillStyle(0x000000, 0.25);
+    graphics.fillEllipse(2, 4, PUCK_RADIUS * 2.2, PUCK_RADIUS * 1.4);
+    graphics.fillStyle(0x15171c, 1);
+    graphics.fillCircle(0, 0, PUCK_RADIUS);
+    graphics.lineStyle(2, 0x3a3f4a, 1);
+    graphics.strokeCircle(0, 0, PUCK_RADIUS - 2);
+
+    return graphics;
   }
 
   private drawBounds(): Phaser.GameObjects.Graphics {
@@ -84,8 +105,11 @@ export class HockeyScene extends Phaser.Scene {
       RINK_ICE.cornerRadius,
     );
 
-    graphics.lineStyle(3, 0xff00ff, 0.9);
+    // Outline: what stops skaters. Filled walls: what stops the puck (front left open).
+    graphics.lineStyle(2, 0xff00ff, 0.6);
     RINK_NETS.forEach((net) => graphics.strokeRect(net.left, net.top, net.right - net.left, net.bottom - net.top));
+    graphics.fillStyle(0xff00ff, 0.9);
+    RINK_NET_WALLS.forEach((wall) => graphics.fillRect(wall.left, wall.top, wall.right - wall.left, wall.bottom - wall.top));
 
     return graphics;
   }

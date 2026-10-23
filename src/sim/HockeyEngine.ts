@@ -9,6 +9,8 @@ const STEP_SECONDS = 1 / 120;
 const MAX_FRAME_SECONDS = 0.1;
 /** Cursor distance (px) at which a pass reaches full speed. */
 const PASS_FULL_SPEED_DISTANCE = 700;
+/** The center faceoff dot. */
+const CENTER_ICE: Vec2 = { x: RINK_WIDTH / 2, y: RINK_HEIGHT / 2 };
 const NO_MOVE: MovementControls = { scheme: 'directional', direction: { x: 0, y: 0 } };
 
 /** Ways of steering a skater; the player can switch between them to compare feel. */
@@ -38,7 +40,7 @@ export interface SkaterControls {
 export class HockeyEngine {
   /** Every skater on the ice; AI teammates and opponents will be added here. */
   public readonly skaters: Skater[] = [new Skater({ x: RINK_WIDTH / 2 - 140, y: RINK_HEIGHT / 2 })];
-  public readonly puck = new Puck({ x: RINK_WIDTH / 2, y: RINK_HEIGHT / 2 });
+  public readonly puck = new Puck(CENTER_ICE);
   /** The skater the player's input drives; switching skaters will change this. */
   public controlledSkater = this.skaters[0];
   private accumulatedSeconds = 0;
@@ -51,6 +53,15 @@ export class HockeyEngine {
       this.step(controls, STEP_SECONDS);
       this.accumulatedSeconds -= STEP_SECONDS;
     }
+  }
+
+  /** Drops the puck, loose and still, back on the center dot. */
+  resetPuck(): void {
+    if (this.puck.carrier) {
+      this.puck.carrier.shotCharge = undefined;
+    }
+
+    this.puck.resetTo(CENTER_ICE);
   }
 
   /** Direction a shot would travel: the aim, limited to the skater's shooting arcs (if any) around their facing. */

@@ -60,6 +60,17 @@ export class Puck implements CircleBody {
     this.carryAngle = Math.atan2(this.position.y - skater.position.y, this.position.x - skater.position.x);
   }
 
+  /** Puts the puck, loose and still, at `position`; anyone may pick it up straight away. */
+  resetTo(position: Vec2): void {
+    this.carrierSkater = undefined;
+    this.lastCarrier = undefined;
+    this.regrabCooldown = 0;
+    this.position.x = position.x;
+    this.position.y = position.y;
+    this.velocity.x = 0;
+    this.velocity.y = 0;
+  }
+
   /** Makes the puck loose with the given velocity; the hook for shots, passes and poke checks. */
   release(velocity: Vec2): void {
     this.lastCarrier = this.carrierSkater;

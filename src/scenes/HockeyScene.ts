@@ -66,6 +66,7 @@ export class HockeyScene extends Phaser.Scene {
     const keyboard = this.input.keyboard!;
     this.moveKeys = keyboard.addKeys({ up: 'W', down: 'S', left: 'A', right: 'D' }) as typeof this.moveKeys;
     keyboard.on('keydown-B', () => this.boundsDebug.setVisible(!this.boundsDebug.visible));
+    keyboard.on('keydown-R', () => this.engine.resetPuck());
     keyboard.on('keydown-M', () => {
       const next = (MOVEMENT_SCHEMES.indexOf(this.movementScheme) + 1) % MOVEMENT_SCHEMES.length;
       this.movementScheme = MOVEMENT_SCHEMES[next];
@@ -87,7 +88,7 @@ export class HockeyScene extends Phaser.Scene {
   private updateHelpText(): void {
     this.helpText.setText(
       `${MOVEMENT_SCHEME_HELP[this.movementScheme]}   M: switch controls (${this.movementScheme})   ` +
-        'Mouse: aim   Left click: shoot (hold to charge)   Right click: pass   B: boundaries',
+        'Mouse: aim   Left click: shoot (hold to charge)   Right click: pass   R: reset puck   B: boundaries',
     );
   }
 

@@ -14,6 +14,8 @@ function defineSpecies(model: string, overrides: Partial<SkaterTuning>): Pokemon
 /** Masses are Pokédex weights in kg. */
 export const POKEMON_SPECIES = {
   garchomp: defineSpecies('Garchomp', { mass: 95 }),
+  gible: defineSpecies('Gible', { mass: 20.5 }),
+  gabite: defineSpecies('Gabite', { mass: 56 }),
   flygon: defineSpecies('Flygon', { mass: 82 }),
   trapinch: defineSpecies('Trapinch', { mass: 15 }),
   vibrava: defineSpecies('Vibrava', { mass: 15.3 }),

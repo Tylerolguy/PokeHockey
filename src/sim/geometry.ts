@@ -164,6 +164,50 @@ export function sweepCircleIntoRect(from: Vec2, to: Vec2, radius: number, rect: 
   return entry;
 }
 
+/**
+ * Pushes two overlapping circles apart and bounces them off each other. Heavier bodies are moved
+ * and deflected less. Returns true if they overlapped.
+ */
+export function resolveCircleCollision(
+  a: CircleBody,
+  b: CircleBody,
+  massA: number,
+  massB: number,
+  restitution: number,
+): boolean {
+  const dx = b.position.x - a.position.x;
+  const dy = b.position.y - a.position.y;
+  const distance = Math.hypot(dx, dy);
+  const overlap = a.radius + b.radius - distance;
+
+  if (overlap <= 0) {
+    return false;
+  }
+
+  // Exactly on top of each other: pick any direction.
+  const normal = distance > 0 ? { x: dx / distance, y: dy / distance } : { x: 1, y: 0 };
+  const inverseA = 1 / massA;
+  const inverseB = 1 / massB;
+  const inverseTotal = inverseA + inverseB;
+
+  a.position.x -= normal.x * overlap * (inverseA / inverseTotal);
+  a.position.y -= normal.y * overlap * (inverseA / inverseTotal);
+  b.position.x += normal.x * overlap * (inverseB / inverseTotal);
+  b.position.y += normal.y * overlap * (inverseB / inverseTotal);
+
+  const closingSpeed = (b.velocity.x - a.velocity.x) * normal.x + (b.velocity.y - a.velocity.y) * normal.y;
+
+  if (closingSpeed < 0) {
+    const impulse = (-(1 + restitution) * closingSpeed) / inverseTotal;
+    a.velocity.x -= impulse * inverseA * normal.x;
+    a.velocity.y -= impulse * inverseA * normal.y;
+    b.velocity.x += impulse * inverseB * normal.x;
+    b.velocity.y += impulse * inverseB * normal.y;
+  }
+
+  return true;
+}
+
 /** Reflects the part of the velocity heading along `wallNormal` (pointing into the wall). */
 function bounceOff(body: CircleBody, wallNormal: Vec2, restitution: number): void {
   const intoWall = body.velocity.x * wallNormal.x + body.velocity.y * wallNormal.y;

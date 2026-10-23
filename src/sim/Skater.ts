@@ -21,6 +21,8 @@ export interface SkaterTuning {
   maxSpeed: number;
   /** collision radius in px */
   radius: number;
+  /** kg; heavier skaters push lighter ones around more in collisions */
+  mass: number;
   /** rad/s a skater's facing rotates (toward the mouse, or when turning with tank controls), at any speed */
   turnRate: number;
   /** acceleration and top speed multiplier while skating backward (tank controls) */
@@ -56,6 +58,7 @@ export const DEFAULT_SKATER_TUNING: SkaterTuning = {
   glideFriction: 160,
   maxSpeed: 340,
   radius: 22,
+  mass: 80,
   turnRate: 7,
   reverseMoveScale: 0.55,
   turningMoveScale: 0.75,
@@ -67,6 +70,9 @@ export const DEFAULT_SKATER_TUNING: SkaterTuning = {
   passMinSpeed: 500,
   passMaxSpeed: 800,
 };
+
+/** Which side a skater plays for. */
+export type Team = 'player' | 'opponent';
 
 /** Plain simulation state for one skater: no Phaser types, so it can run headless. */
 export class Skater implements CircleBody {
@@ -85,6 +91,7 @@ export class Skater implements CircleBody {
 
   constructor(
     start: Vec2,
+    public readonly team: Team,
     public readonly tuning: SkaterTuning = DEFAULT_SKATER_TUNING,
   ) {
     this.position = { ...start };
@@ -132,7 +139,10 @@ export class Skater implements CircleBody {
 
     this.position.x += this.velocity.x * deltaSeconds;
     this.position.y += this.velocity.y * deltaSeconds;
+    this.collideWithRink();
+  }
 
+  collideWithRink(): void {
     containInRoundedRect(this, RINK_ICE, BOARD_RESTITUTION);
     RINK_NETS.forEach((net) => pushOutOfRect(this, net, NET_RESTITUTION));
   }

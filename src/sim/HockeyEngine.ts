@@ -1,4 +1,4 @@
-import { clamp, clampDirectionToArcs, wrapAngle, type Vec2 } from './geometry';
+import { clamp, clampDirectionToArcs, resolveCircleCollision, wrapAngle, type Vec2 } from './geometry';
 import { Puck } from './Puck';
 import { Skater } from './Skater';
 import { RINK_HEIGHT, RINK_WIDTH } from './rink';
@@ -9,6 +9,8 @@ const STEP_SECONDS = 1 / 120;
 const MAX_FRAME_SECONDS = 0.1;
 /** Cursor distance (px) at which a pass reaches full speed. */
 const PASS_FULL_SPEED_DISTANCE = 700;
+/** How bouncy skater-on-skater hits are. */
+const SKATER_RESTITUTION = 0.3;
 /** The center faceoff dot. */
 const CENTER_ICE: Vec2 = { x: RINK_WIDTH / 2, y: RINK_HEIGHT / 2 };
 const NO_MOVE: MovementControls = { scheme: 'directional', direction: { x: 0, y: 0 } };
@@ -35,11 +37,14 @@ export interface SkaterControls {
 
 /** Runs one match's simulation. Knows nothing about Phaser. */
 export class HockeyEngine {
-  /** Every skater on the ice; AI teammates and opponents will be added here. */
-  public readonly skaters: Skater[] = [new Skater({ x: RINK_WIDTH / 2 - 140, y: RINK_HEIGHT / 2 })];
   public readonly puck = new Puck(CENTER_ICE);
   /** The skater the player's input drives; switching skaters will change this. */
-  public controlledSkater = this.skaters[0];
+  public controlledSkater: Skater;
+
+  /** `skaters` is everyone on the ice; the first starts as the player's. */
+  constructor(public readonly skaters: Skater[]) {
+    this.controlledSkater = skaters[0];
+  }
   private accumulatedSeconds = 0;
   private wasPassHeld = false;
 
@@ -101,6 +106,7 @@ export class HockeyEngine {
       const { direction, moveScale } = this.steer(skater, move, controls.aim, deltaSeconds);
       skater.update(direction, deltaSeconds, moveScale);
     });
+    this.resolveSkaterCollisions();
     this.updatePossession();
     this.puck.update(deltaSeconds);
   }
@@ -195,6 +201,21 @@ export class HockeyEngine {
     const distance = Math.hypot(target.x - this.puck.position.x, target.y - this.puck.position.y);
     const firmness = clamp(distance / PASS_FULL_SPEED_DISTANCE, 0, 1);
     this.puck.shoot(direction, passMinSpeed + (passMaxSpeed - passMinSpeed) * firmness);
+  }
+
+  private resolveSkaterCollisions(): void {
+    for (let i = 0; i < this.skaters.length; i++) {
+      for (let j = i + 1; j < this.skaters.length; j++) {
+        const a = this.skaters[i];
+        const b = this.skaters[j];
+
+        if (resolveCircleCollision(a, b, a.tuning.mass, b.tuning.mass, SKATER_RESTITUTION)) {
+          // Being shoved apart can push a skater into the boards or a net.
+          a.collideWithRink();
+          b.collideWithRink();
+        }
+      }
+    }
   }
 
   /** Any skater touching the puck takes it, whether it is loose or carried by someone else. */

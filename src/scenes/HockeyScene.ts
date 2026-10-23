@@ -6,26 +6,51 @@ import {
   getPokemonTextureKey,
   loadPokemonModel,
 } from '../pokemon/pokemonSprites';
+import { POKEMON_SPECIES, type PokemonSpecies } from '../data/pokemonSpecies';
 import { HockeyEngine, type MovementControls, type SkaterControls } from '../sim/HockeyEngine';
+import { Skater, type Team } from '../sim/Skater';
 import { clamp, lerpVec, type CircleBody, type Vec2 } from '../sim/geometry';
 import { PUCK_RADIUS } from '../sim/Puck';
-import { RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RINK_ICE, RINK_NET_WALLS, RINK_NETS } from '../sim/rink';
+import {
+  RINK_BACKGROUND_KEY,
+  RINK_BACKGROUND_PATH,
+  RINK_HEIGHT,
+  RINK_ICE,
+  RINK_NET_WALLS,
+  RINK_NETS,
+  RINK_WIDTH,
+} from '../sim/rink';
 
-const PLAYER_MODEL = 'Garchomp';
+/**
+ * Who starts on the ice and for which team; the first is the one the player controls. Team lives
+ * here rather than on the species so any species can play on either side. Flygon has no AI yet.
+ */
+const LINEUP: { species: PokemonSpecies; team: Team; x: number; y: number; facingX: number }[] = [
+  { species: POKEMON_SPECIES.garchomp, team: 'player', x: RINK_WIDTH / 2 - 140, y: RINK_HEIGHT / 2, facingX: 1 },
+  { species: POKEMON_SPECIES.flygon, team: 'opponent', x: RINK_WIDTH / 2 + 140, y: RINK_HEIGHT / 2, facingX: -1 },
+];
 const SPRITE_SCALE = 1.7;
+/** Draw order: ice markings, then skaters and puck sorted by screen y, then aim and HUD on top. */
+const RING_DEPTH = 1;
+const ON_ICE_BASE_DEPTH = 100;
+const AIM_DEPTH = 2000;
+const HUD_DEPTH = 2001;
 /** Moving slower than this (px/s) plays the idle animation. */
 const WALK_ANIMATION_MIN_SPEED = 25;
 const AIM_LINE_LENGTH = 70;
 const AIM_LINE_CHARGED_LENGTH = 150;
 const CHARGE_BAR_WIDTH = 48;
 const SHOT_ARC_EDGE_LENGTH = 110;
-/** Ring on the ice around the controlled skater, with a pointer on its edge for the exact facing. */
-const CONTROL_RING_RADIUS = 28;
+/** Ring on the ice around each skater in their team color, with a pointer on its edge for the exact facing. */
+const SKATER_RING_RADIUS = 28;
 /** How far the pointer's tip reaches past the ring; its sides meet the ring tangentially. */
-const CONTROL_RING_POINTER_LENGTH = 18;
-const CONTROL_RING_THICKNESS = 5;
-const CONTROL_RING_COLOR = 0x3d8bff;
-const CONTROL_RING_ALPHA = 0.9;
+const SKATER_RING_POINTER_LENGTH = 18;
+const SKATER_RING_THICKNESS = 5;
+const SKATER_RING_ALPHA = 0.9;
+const TEAM_COLORS: Record<Team, number> = {
+  player: 0x3d8bff,
+  opponent: 0xff3d4f,
+};
 
 type MovementScheme = MovementControls['scheme'];
 const MOVEMENT_SCHEMES: MovementScheme[] = ['mouseFacing', 'directional', 'tank'];
@@ -37,12 +62,15 @@ const MOVEMENT_SCHEME_HELP: Record<MovementScheme, string> = {
 
 export class HockeyScene extends Phaser.Scene {
   private engine!: HockeyEngine;
-  private sprite!: Phaser.GameObjects.Sprite;
+  /** Each skater's sprite and the sprite sheet it uses. */
+  private skaterSprites = new Map<
+    Skater,
+    { sprite: Phaser.GameObjects.Sprite; ring: Phaser.GameObjects.Graphics; model: string }
+  >();
   private puckSprite!: Phaser.GameObjects.Graphics;
   private aimGraphics!: Phaser.GameObjects.Graphics;
   private moveKeys!: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
   private boundsDebug!: Phaser.GameObjects.Graphics;
-  private controlRing!: Phaser.GameObjects.Graphics;
   private helpText!: Phaser.GameObjects.Text;
   private movementScheme: MovementScheme = MOVEMENT_SCHEMES[0];
 
@@ -52,21 +80,27 @@ export class HockeyScene extends Phaser.Scene {
 
   preload(): void {
     this.load.image(RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH);
-    loadPokemonModel(this, PLAYER_MODEL);
+    new Set(LINEUP.map(({ species }) => species.model)).forEach((model) => loadPokemonModel(this, model));
   }
 
   create(): void {
     this.add.image(0, 0, RINK_BACKGROUND_KEY).setOrigin(0, 0);
     this.boundsDebug = this.drawBounds();
 
-    createPokemonAnimations(this, PLAYER_MODEL);
-    this.engine = new HockeyEngine();
-    this.controlRing = this.drawControlRing();
+    const skaters = LINEUP.map(({ species, team, x, y, facingX }) => {
+      const skater = new Skater({ x, y }, team, species.tuning);
+      skater.setFacing(facingX, 0);
+      createPokemonAnimations(this, species.model);
+      const sprite = this.add.sprite(x, y, getPokemonTextureKey(species.model)).setScale(SPRITE_SCALE);
+      const ring = this.drawSkaterRing(TEAM_COLORS[team], team === 'player').setDepth(RING_DEPTH);
+      this.skaterSprites.set(skater, { sprite, ring, model: species.model });
+
+      return skater;
+    });
+    this.engine = new HockeyEngine(skaters);
     this.puckSprite = this.drawPuck();
-    this.sprite = this.add.sprite(0, 0, getPokemonTextureKey(PLAYER_MODEL));
-    this.sprite.setScale(SPRITE_SCALE);
-    // Above the skater: aiming back across them must still show the line.
-    this.aimGraphics = this.add.graphics();
+    // Above the skaters: aiming back across them must still show the line.
+    this.aimGraphics = this.add.graphics().setDepth(AIM_DEPTH);
     this.syncSprites();
 
     const keyboard = this.input.keyboard!;
@@ -87,7 +121,8 @@ export class HockeyScene extends Phaser.Scene {
         backgroundColor: '#00000088',
         padding: { x: 8, y: 4 },
       })
-      .setOrigin(0, 1);
+      .setOrigin(0, 1)
+      .setDepth(HUD_DEPTH);
     this.updateHelpText();
   }
 
@@ -124,22 +159,23 @@ export class HockeyScene extends Phaser.Scene {
 
     this.engine.update(controls, deltaMs / 1000);
     this.drawAim(controls.aim);
-
-    const skater = this.engine.controlledSkater;
-    const facing = getDirectionFromVector(skater.facing.x, skater.facing.y);
-    const state = skater.speed > WALK_ANIMATION_MIN_SPEED ? 'Walk' : 'Idle';
-    this.sprite.play(getPokemonAnimationKey(PLAYER_MODEL, state, facing), true);
     this.syncSprites();
   }
 
   private syncSprites(): void {
-    const { controlledSkater: skater, puck } = this.engine;
-    const skaterPosition = this.getDrawPosition(skater);
+    const { puck } = this.engine;
+
+    this.skaterSprites.forEach(({ sprite, ring, model }, skater) => {
+      const position = this.getDrawPosition(skater);
+      const facing = getDirectionFromVector(skater.facing.x, skater.facing.y);
+      const state = skater.speed > WALK_ANIMATION_MIN_SPEED ? 'Walk' : 'Idle';
+      sprite.play(getPokemonAnimationKey(model, state, facing), true);
+      sprite.setPosition(position.x, position.y).setDepth(ON_ICE_BASE_DEPTH + position.y);
+      ring.setPosition(position.x, position.y).setRotation(Math.atan2(skater.facing.y, skater.facing.x));
+    });
+
     const puckPosition = this.getDrawPosition(puck);
-    this.sprite.setPosition(skaterPosition.x, skaterPosition.y);
-    this.puckSprite.setPosition(puckPosition.x, puckPosition.y);
-    this.controlRing.setPosition(skaterPosition.x, skaterPosition.y);
-    this.controlRing.setRotation(Math.atan2(skater.facing.y, skater.facing.x));
+    this.puckSprite.setPosition(puckPosition.x, puckPosition.y).setDepth(ON_ICE_BASE_DEPTH + puckPosition.y);
   }
 
   /**
@@ -151,20 +187,24 @@ export class HockeyScene extends Phaser.Scene {
   }
 
   /**
-   * Blue ring marking the controlled skater, drawn pointing along +x and rotated to the facing.
-   * The pointer shows the exact facing, which the 8-direction sprite can only approximate.
+   * Team-colored ring marking a skater, drawn pointing along +x and rotated to the facing.
+   * The optional pointer shows the exact facing, which the 8-direction sprite can only approximate.
    */
-  private drawControlRing(): Phaser.GameObjects.Graphics {
+  private drawSkaterRing(color: number, withPointer: boolean): Phaser.GameObjects.Graphics {
     const graphics = this.add.graphics();
-    graphics.fillStyle(CONTROL_RING_COLOR, 0.18);
-    graphics.fillCircle(0, 0, CONTROL_RING_RADIUS);
-    graphics.lineStyle(CONTROL_RING_THICKNESS, CONTROL_RING_COLOR, CONTROL_RING_ALPHA);
-    graphics.strokeCircle(0, 0, CONTROL_RING_RADIUS);
+    graphics.fillStyle(color, 0.18);
+    graphics.fillCircle(0, 0, SKATER_RING_RADIUS);
+    graphics.lineStyle(SKATER_RING_THICKNESS, color, SKATER_RING_ALPHA);
+    graphics.strokeCircle(0, 0, SKATER_RING_RADIUS);
+
+    if (!withPointer) {
+      return graphics;
+    }
 
     // Pointer: from the tip, two lines tangent to the ring's outer edge, closed along that edge,
     // so it flows out of the ring like a teardrop instead of sitting on top of it.
-    const outerRadius = CONTROL_RING_RADIUS + CONTROL_RING_THICKNESS / 2;
-    const tipDistance = CONTROL_RING_RADIUS + CONTROL_RING_POINTER_LENGTH;
+    const outerRadius = SKATER_RING_RADIUS + SKATER_RING_THICKNESS / 2;
+    const tipDistance = SKATER_RING_RADIUS + SKATER_RING_POINTER_LENGTH;
     const tangentAngle = Math.acos(outerRadius / tipDistance);
     const arcSteps = 12;
     const points = [new Phaser.Math.Vector2(tipDistance, 0)];
@@ -174,7 +214,7 @@ export class HockeyScene extends Phaser.Scene {
       points.push(new Phaser.Math.Vector2(Math.cos(angle) * outerRadius, Math.sin(angle) * outerRadius));
     }
 
-    graphics.fillStyle(CONTROL_RING_COLOR, CONTROL_RING_ALPHA);
+    graphics.fillStyle(color, SKATER_RING_ALPHA);
     graphics.fillPoints(points, true);
 
     return graphics;

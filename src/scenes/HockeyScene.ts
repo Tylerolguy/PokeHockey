@@ -22,7 +22,9 @@ const SHOT_ARC_EDGE_LENGTH = 110;
 const FACING_MARKER_DISTANCE = 30;
 
 type MovementScheme = MovementControls['scheme'];
+const MOVEMENT_SCHEMES: MovementScheme[] = ['mouseFacing', 'directional', 'tank'];
 const MOVEMENT_SCHEME_HELP: Record<MovementScheme, string> = {
+  mouseFacing: 'WASD: skate (fastest toward the mouse)',
   directional: 'WASD: skate up/left/down/right',
   tank: 'W/S: skate forward/backward   A/D: turn',
 };
@@ -36,7 +38,7 @@ export class HockeyScene extends Phaser.Scene {
   private boundsDebug!: Phaser.GameObjects.Graphics;
   private facingMarker!: Phaser.GameObjects.Graphics;
   private helpText!: Phaser.GameObjects.Text;
-  private movementScheme: MovementScheme = 'tank';
+  private movementScheme: MovementScheme = MOVEMENT_SCHEMES[0];
 
   constructor() {
     super('HockeyScene');
@@ -65,7 +67,8 @@ export class HockeyScene extends Phaser.Scene {
     this.moveKeys = keyboard.addKeys({ up: 'W', down: 'S', left: 'A', right: 'D' }) as typeof this.moveKeys;
     keyboard.on('keydown-B', () => this.boundsDebug.setVisible(!this.boundsDebug.visible));
     keyboard.on('keydown-M', () => {
-      this.movementScheme = this.movementScheme === 'tank' ? 'directional' : 'tank';
+      const next = (MOVEMENT_SCHEMES.indexOf(this.movementScheme) + 1) % MOVEMENT_SCHEMES.length;
+      this.movementScheme = MOVEMENT_SCHEMES[next];
       this.updateHelpText();
     });
 
@@ -93,9 +96,14 @@ export class HockeyScene extends Phaser.Scene {
     const horizontal = Number(keys.right.isDown) - Number(keys.left.isDown);
     const vertical = Number(keys.down.isDown) - Number(keys.up.isDown);
 
-    return this.movementScheme === 'tank'
-      ? { scheme: 'tank', throttle: -vertical, turn: horizontal }
-      : { scheme: 'directional', direction: { x: horizontal, y: vertical } };
+    switch (this.movementScheme) {
+      case 'tank':
+        return { scheme: 'tank', throttle: -vertical, turn: horizontal };
+      case 'directional':
+        return { scheme: 'directional', direction: { x: horizontal, y: vertical } };
+      case 'mouseFacing':
+        return { scheme: 'mouseFacing', direction: { x: horizontal, y: vertical } };
+    }
   }
 
   update(_time: number, deltaMs: number): void {
@@ -142,8 +150,8 @@ export class HockeyScene extends Phaser.Scene {
   }
 
   /**
-   * Aim line from the puck along the shot's path (limited to the shooting arcs) while carrying,
-   * plus the arcs' edges and a charge meter while winding up.
+   * Aim line from the puck along the shot's path (limited to the shooting arcs, if any) while
+   * carrying, plus the arcs' edges and a charge meter while winding up.
    */
   private drawAim(aim: { x: number; y: number }): void {
     const { controlledSkater: skater, puck } = this.engine;
@@ -158,11 +166,13 @@ export class HockeyScene extends Phaser.Scene {
     const length = AIM_LINE_LENGTH + (AIM_LINE_CHARGED_LENGTH - AIM_LINE_LENGTH) * (charge ?? 0);
     const start = puck.position;
 
-    if (charge !== undefined) {
+    const shotArcs = skater.tuning.shotArcs;
+
+    if (charge !== undefined && shotArcs) {
       const facingAngle = Math.atan2(skater.facing.y, skater.facing.x);
       this.aimGraphics.lineStyle(2, 0xffa424, 0.35);
 
-      for (const arc of skater.tuning.shotArcs) {
+      for (const arc of shotArcs) {
         for (const side of [-1, 1]) {
           const edgeAngle = facingAngle + arc.offset + side * arc.halfAngle;
           this.aimGraphics.lineBetween(

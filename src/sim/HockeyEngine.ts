@@ -1,4 +1,4 @@
-import { clamp, clampDirectionToArcs, type Vec2 } from './geometry';
+import { clamp, clampDirectionToArcs, wrapAngle, type Vec2 } from './geometry';
 import { Puck } from './Puck';
 import { Skater } from './Skater';
 import { RINK_HEIGHT, RINK_WIDTH } from './rink';
@@ -16,7 +16,12 @@ export type MovementControls =
   /** Move along a screen direction (each axis -1..1) and face the way you move. */
   | { scheme: 'directional'; direction: Vec2 }
   /** `throttle` 1 skates forward along facing, -1 backward (still facing forward); `turn` -1/1 rotates counter-/clockwise. */
-  | { scheme: 'tank'; throttle: number; turn: number };
+  | { scheme: 'tank'; throttle: number; turn: number }
+  /**
+   * Move along a screen direction while turning to face the aim point. Moving the way you face
+   * is fastest; the further the move direction is from facing, the lower acceleration and top speed.
+   */
+  | { scheme: 'mouseFacing'; direction: Vec2 };
 
 /** One frame of controls for a skater, from a player or (later) AI. */
 export interface SkaterControls {
@@ -48,9 +53,12 @@ export class HockeyEngine {
     }
   }
 
-  /** Direction a shot would travel: the aim, limited to the skater's shooting arcs around their facing. */
+  /** Direction a shot would travel: the aim, limited to the skater's shooting arcs (if any) around their facing. */
   getShotDirection(skater: Skater, aim: Vec2): Vec2 {
-    return clampDirectionToArcs(this.getAimDirection(skater, aim), skater.facing, skater.tuning.shotArcs);
+    const direction = this.getAimDirection(skater, aim);
+    const arcs = skater.tuning.shotArcs;
+
+    return arcs ? clampDirectionToArcs(direction, skater.facing, arcs) : direction;
   }
 
   /**
@@ -69,7 +77,7 @@ export class HockeyEngine {
     this.handleStickControls(this.controlledSkater, controls, deltaSeconds);
     this.skaters.forEach((skater) => {
       const move = skater === this.controlledSkater ? controls.move : NO_MOVE;
-      const { direction, moveScale } = this.steer(skater, move, deltaSeconds);
+      const { direction, moveScale } = this.steer(skater, move, controls.aim, deltaSeconds);
       skater.update(direction, deltaSeconds, moveScale);
     });
     this.updatePossession();
@@ -80,7 +88,18 @@ export class HockeyEngine {
    * Applies a movement scheme's turning. Returns the direction to accelerate in and how much to
    * scale acceleration and top speed (backward and turning are slower).
    */
-  private steer(skater: Skater, move: MovementControls, deltaSeconds: number): { direction: Vec2; moveScale: number } {
+  private steer(
+    skater: Skater,
+    move: MovementControls,
+    aim: Vec2,
+    deltaSeconds: number,
+  ): { direction: Vec2; moveScale: number } {
+    if (move.scheme === 'mouseFacing') {
+      this.turnToward(skater, aim, deltaSeconds);
+
+      return { direction: move.direction, moveScale: this.getFacingMoveScale(skater, move.direction) };
+    }
+
     if (move.scheme === 'directional') {
       const length = Math.hypot(move.direction.x, move.direction.y);
 
@@ -104,6 +123,39 @@ export class HockeyEngine {
     }
 
     return { direction: { x: skater.facing.x * move.throttle, y: skater.facing.y * move.throttle }, moveScale };
+  }
+
+  /** Rotates the skater's facing toward `target`, no faster than their speed-dependent turn rate. */
+  private turnToward(skater: Skater, target: Vec2, deltaSeconds: number): void {
+    const dx = target.x - skater.position.x;
+    const dy = target.y - skater.position.y;
+
+    // Cursor on top of the skater: no meaningful direction, keep facing.
+    if (Math.hypot(dx, dy) < skater.radius) {
+      return;
+    }
+
+    const current = Math.atan2(skater.facing.y, skater.facing.x);
+    const maxTurn = skater.turnRate * deltaSeconds;
+    const angle = current + clamp(wrapAngle(Math.atan2(dy, dx) - current), -maxTurn, maxTurn);
+    skater.setFacing(Math.cos(angle), Math.sin(angle));
+  }
+
+  /**
+   * Speed multiplier for moving in `direction` given where the skater faces: `facingMoveScale`
+   * straight ahead, `reverseMoveScale` straight back, easing between them (sideways is halfway).
+   */
+  private getFacingMoveScale(skater: Skater, direction: Vec2): number {
+    const length = Math.hypot(direction.x, direction.y);
+
+    if (length === 0) {
+      return 1;
+    }
+
+    const alignment = (direction.x * skater.facing.x + direction.y * skater.facing.y) / length;
+    const { facingMoveScale, reverseMoveScale } = skater.tuning;
+
+    return reverseMoveScale + (facingMoveScale - reverseMoveScale) * ((alignment + 1) / 2);
   }
 
   private handleStickControls(skater: Skater, controls: SkaterControls, deltaSeconds: number): void {

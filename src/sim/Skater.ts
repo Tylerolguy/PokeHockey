@@ -16,8 +16,13 @@ export interface SkaterTuning {
    */
   turnRateStanding: number;
   turnRateAtMaxSpeed: number;
-  /** acceleration and top speed multiplier while skating backward */
+  /**
+   * acceleration and top speed multiplier while skating backward; with mouse facing, the
+   * multiplier slides from `facingMoveScale` (moving where you face) to this (moving away)
+   */
   reverseMoveScale: number;
+  /** acceleration and top speed multiplier while moving the way the skater faces (mouse facing) */
+  facingMoveScale: number;
   /** acceleration and top speed multiplier while turning (tank controls) */
   turningMoveScale: number;
   /** rad/s the carried puck swings around to the new facing; a future puck-control stat */
@@ -26,11 +31,12 @@ export interface SkaterTuning {
   shotMinSpeed: number;
   shotMaxSpeed: number;
   /**
-   * Directions a shot can go, relative to facing (offset 0 = straight ahead, PI = behind).
-   * Moves and abilities can widen these or add arcs, e.g. `{ offset: Math.PI, halfAngle: ... }`
-   * for a behind-the-back shot.
+   * Optional limit on where shots can go, as arcs relative to facing (offset 0 = straight ahead,
+   * PI = behind). Unset means shots go wherever aimed. Kept for special moves, e.g.
+   * `[{ offset: 0, halfAngle: Math.PI / 3 }]` for a 120° forward cone, plus
+   * `{ offset: Math.PI, halfAngle: ... }` for a behind-the-back shot.
    */
-  shotArcs: Arc[];
+  shotArcs?: Arc[];
   /** seconds of holding shoot to reach full power */
   shotChargeSeconds: number;
   /** acceleration and top speed multiplier while winding up a shot */
@@ -48,11 +54,11 @@ export const DEFAULT_SKATER_TUNING: SkaterTuning = {
   turnRateStanding: 6,
   turnRateAtMaxSpeed: 2.6,
   reverseMoveScale: 0.55,
+  facingMoveScale: 1,
   turningMoveScale: 0.75,
   puckHandlingTurnRate: 14,
   shotMinSpeed: 650,
   shotMaxSpeed: 1100,
-  shotArcs: [{ offset: 0, halfAngle: Math.PI / 3 }],
   shotChargeSeconds: 0.8,
   chargingMoveScale: 0.55,
   passMinSpeed: 400,

@@ -5,9 +5,9 @@ import {
   getPokemonAnimationKey,
   getPokemonTextureKey,
   loadPokemonModel,
-  type PokemonDirection,
 } from '../pokemon/pokemonSprites';
-import { HockeyEngine } from '../sim/HockeyEngine';
+import { HockeyEngine, type MovementControls, type SkaterControls } from '../sim/HockeyEngine';
+import { clamp } from '../sim/geometry';
 import { PUCK_RADIUS } from '../sim/Puck';
 import { RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RINK_ICE, RINK_NET_WALLS, RINK_NETS } from '../sim/rink';
 
@@ -15,14 +15,28 @@ const PLAYER_MODEL = 'Garchomp';
 const SPRITE_SCALE = 1.7;
 /** Moving slower than this (px/s) plays the idle animation. */
 const WALK_ANIMATION_MIN_SPEED = 25;
+const AIM_LINE_LENGTH = 70;
+const AIM_LINE_CHARGED_LENGTH = 150;
+const CHARGE_BAR_WIDTH = 48;
+const SHOT_ARC_EDGE_LENGTH = 110;
+const FACING_MARKER_DISTANCE = 30;
+
+type MovementScheme = MovementControls['scheme'];
+const MOVEMENT_SCHEME_HELP: Record<MovementScheme, string> = {
+  directional: 'WASD: skate up/left/down/right',
+  tank: 'W/S: skate forward/backward   A/D: turn',
+};
 
 export class HockeyScene extends Phaser.Scene {
   private engine!: HockeyEngine;
   private sprite!: Phaser.GameObjects.Sprite;
   private puckSprite!: Phaser.GameObjects.Graphics;
+  private aimGraphics!: Phaser.GameObjects.Graphics;
   private moveKeys!: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
   private boundsDebug!: Phaser.GameObjects.Graphics;
-  private facing: PokemonDirection = 2;
+  private facingMarker!: Phaser.GameObjects.Graphics;
+  private helpText!: Phaser.GameObjects.Text;
+  private movementScheme: MovementScheme = 'tank';
 
   constructor() {
     super('HockeyScene');
@@ -39,47 +53,139 @@ export class HockeyScene extends Phaser.Scene {
 
     createPokemonAnimations(this, PLAYER_MODEL);
     this.engine = new HockeyEngine();
+    this.facingMarker = this.drawFacingMarker();
     this.puckSprite = this.drawPuck();
     this.sprite = this.add.sprite(0, 0, getPokemonTextureKey(PLAYER_MODEL));
     this.sprite.setScale(SPRITE_SCALE);
+    // Above the skater: aiming back across them must still show the line.
+    this.aimGraphics = this.add.graphics();
     this.syncSprites();
 
     const keyboard = this.input.keyboard!;
     this.moveKeys = keyboard.addKeys({ up: 'W', down: 'S', left: 'A', right: 'D' }) as typeof this.moveKeys;
     keyboard.on('keydown-B', () => this.boundsDebug.setVisible(!this.boundsDebug.visible));
+    keyboard.on('keydown-M', () => {
+      this.movementScheme = this.movementScheme === 'tank' ? 'directional' : 'tank';
+      this.updateHelpText();
+    });
 
-    this.add
-      .text(16, RINK_HEIGHT - 16, 'WASD: skate   B: toggle boundaries', {
+    this.helpText = this.add
+      .text(16, RINK_HEIGHT - 16, '', {
         fontFamily: 'monospace',
-        fontSize: '18px',
+        fontSize: '15px',
         color: '#ffffff',
         backgroundColor: '#00000088',
         padding: { x: 8, y: 4 },
       })
       .setOrigin(0, 1);
+    this.updateHelpText();
+  }
+
+  private updateHelpText(): void {
+    this.helpText.setText(
+      `${MOVEMENT_SCHEME_HELP[this.movementScheme]}   M: switch controls (${this.movementScheme})   ` +
+        'Mouse: aim   Left click: shoot (hold to charge)   Right click: pass   B: boundaries',
+    );
+  }
+
+  private readMovement(): MovementControls {
+    const keys = this.moveKeys;
+    const horizontal = Number(keys.right.isDown) - Number(keys.left.isDown);
+    const vertical = Number(keys.down.isDown) - Number(keys.up.isDown);
+
+    return this.movementScheme === 'tank'
+      ? { scheme: 'tank', throttle: -vertical, turn: horizontal }
+      : { scheme: 'directional', direction: { x: horizontal, y: vertical } };
   }
 
   update(_time: number, deltaMs: number): void {
-    const input = {
-      x: Number(this.moveKeys.right.isDown) - Number(this.moveKeys.left.isDown),
-      y: Number(this.moveKeys.down.isDown) - Number(this.moveKeys.up.isDown),
+    const pointer = this.input.activePointer;
+    const controls: SkaterControls = {
+      move: this.readMovement(),
+      aim: { x: pointer.worldX, y: pointer.worldY },
+      shoot: pointer.leftButtonDown(),
+      pass: pointer.rightButtonDown(),
     };
 
-    this.engine.update(input, deltaMs / 1000);
+    this.engine.update(controls, deltaMs / 1000);
+    this.drawAim(controls.aim);
 
-    if (input.x !== 0 || input.y !== 0) {
-      this.facing = getDirectionFromVector(input.x, input.y);
-    }
-
-    const state = this.engine.skater.speed > WALK_ANIMATION_MIN_SPEED ? 'Walk' : 'Idle';
-    this.sprite.play(getPokemonAnimationKey(PLAYER_MODEL, state, this.facing), true);
+    const skater = this.engine.controlledSkater;
+    const facing = getDirectionFromVector(skater.facing.x, skater.facing.y);
+    const state = skater.speed > WALK_ANIMATION_MIN_SPEED ? 'Walk' : 'Idle';
+    this.sprite.play(getPokemonAnimationKey(PLAYER_MODEL, state, facing), true);
     this.syncSprites();
   }
 
   private syncSprites(): void {
-    const { skater, puck } = this.engine;
+    const { controlledSkater: skater, puck } = this.engine;
     this.sprite.setPosition(skater.position.x, skater.position.y);
     this.puckSprite.setPosition(puck.position.x, puck.position.y);
+    this.facingMarker.setPosition(skater.position.x, skater.position.y);
+    this.facingMarker.setRotation(Math.atan2(skater.facing.y, skater.facing.x));
+  }
+
+  /** Small arrow on the ice showing the exact facing, which the 8-direction sprite can only approximate. */
+  private drawFacingMarker(): Phaser.GameObjects.Graphics {
+    const graphics = this.add.graphics();
+    graphics.fillStyle(0xffffff, 0.75);
+    graphics.fillTriangle(
+      FACING_MARKER_DISTANCE + 8,
+      0,
+      FACING_MARKER_DISTANCE,
+      -5,
+      FACING_MARKER_DISTANCE,
+      5,
+    );
+
+    return graphics;
+  }
+
+  /**
+   * Aim line from the puck along the shot's path (limited to the shooting arcs) while carrying,
+   * plus the arcs' edges and a charge meter while winding up.
+   */
+  private drawAim(aim: { x: number; y: number }): void {
+    const { controlledSkater: skater, puck } = this.engine;
+    this.aimGraphics.clear();
+
+    if (puck.carrier !== skater) {
+      return;
+    }
+
+    const direction = this.engine.getShotDirection(skater, aim);
+    const charge = skater.shotCharge === undefined ? undefined : clamp(skater.shotCharge / skater.tuning.shotChargeSeconds, 0, 1);
+    const length = AIM_LINE_LENGTH + (AIM_LINE_CHARGED_LENGTH - AIM_LINE_LENGTH) * (charge ?? 0);
+    const start = puck.position;
+
+    if (charge !== undefined) {
+      const facingAngle = Math.atan2(skater.facing.y, skater.facing.x);
+      this.aimGraphics.lineStyle(2, 0xffa424, 0.35);
+
+      for (const arc of skater.tuning.shotArcs) {
+        for (const side of [-1, 1]) {
+          const edgeAngle = facingAngle + arc.offset + side * arc.halfAngle;
+          this.aimGraphics.lineBetween(
+            start.x,
+            start.y,
+            start.x + Math.cos(edgeAngle) * SHOT_ARC_EDGE_LENGTH,
+            start.y + Math.sin(edgeAngle) * SHOT_ARC_EDGE_LENGTH,
+          );
+        }
+      }
+    }
+
+    this.aimGraphics.lineStyle(3, charge === undefined ? 0xffffff : 0xffa424, charge === undefined ? 0.6 : 0.95);
+    this.aimGraphics.lineBetween(start.x, start.y, start.x + direction.x * length, start.y + direction.y * length);
+
+    if (charge !== undefined) {
+      const barX = skater.position.x - CHARGE_BAR_WIDTH / 2;
+      const barY = skater.position.y - 58;
+      this.aimGraphics.fillStyle(0x000000, 0.6);
+      this.aimGraphics.fillRect(barX - 2, barY - 2, CHARGE_BAR_WIDTH + 4, 10);
+      this.aimGraphics.fillStyle(charge >= 1 ? 0xff4b2b : 0xffa424, 1);
+      this.aimGraphics.fillRect(barX, barY, CHARGE_BAR_WIDTH * charge, 6);
+    }
   }
 
   private drawPuck(): Phaser.GameObjects.Graphics {

@@ -1,5 +1,6 @@
-import { containInRoundedRect, pushOutOfRect, type CircleBody, type Vec2 } from './geometry';
+import { containInRoundedRect, pushOutOfRect, sweepCircleIntoRect, wrapAngle, type CircleBody, type Vec2 } from './geometry';
 import { RINK_ICE, RINK_NET_WALLS } from './rink';
+import type { Skater } from './Skater';
 
 export const PUCK_RADIUS = 7;
 /** px/s² of ice friction; low so the puck keeps its momentum. */
@@ -9,11 +10,21 @@ const PUCK_MAX_SPEED = 1100;
 const PUCK_BOARD_RESTITUTION = 0.75;
 /** Net mesh soaks up the puck so goals stay in. */
 const PUCK_NET_RESTITUTION = 0.05;
+/** Gap between a carrier's collision circle and the carried puck. */
+const CARRY_GAP = 3;
+/** After letting go, the same skater can't instantly re-grab the puck (so shots leave the stick). */
+const REGRAB_COOLDOWN_SECONDS = 0.3;
 
 export class Puck implements CircleBody {
   public readonly position: Vec2;
   public readonly velocity: Vec2 = { x: 0, y: 0 };
   public readonly radius = PUCK_RADIUS;
+  /** The skater in possession, or undefined while the puck is loose. */
+  private carrierSkater?: Skater;
+  /** Angle of the puck around its carrier; swings toward the carrier's facing. */
+  private carryAngle = 0;
+  private lastCarrier?: Skater;
+  private regrabCooldown = 0;
 
   constructor(start: Vec2) {
     this.position = { ...start };
@@ -23,7 +34,57 @@ export class Puck implements CircleBody {
     return Math.hypot(this.velocity.x, this.velocity.y);
   }
 
+  get carrier(): Skater | undefined {
+    return this.carrierSkater;
+  }
+
+  canBeTakenBy(skater: Skater): boolean {
+    return skater !== this.carrierSkater && !(skater === this.lastCarrier && this.regrabCooldown > 0);
+  }
+
+  /** True if no net wall lies between `from` and the puck, e.g. so a skater can't grab it through the mesh. */
+  isReachableFrom(from: Vec2): boolean {
+    return RINK_NET_WALLS.every((wall) => sweepCircleIntoRect(from, this.position, this.radius, wall) === undefined);
+  }
+
+  /** Gives possession to `skater`, taking it from any current carrier. */
+  giveTo(skater: Skater): void {
+    if (this.carrierSkater) {
+      // Stolen: the old carrier can't snatch it straight back, or two skaters would trade it every frame.
+      this.lastCarrier = this.carrierSkater;
+      this.regrabCooldown = REGRAB_COOLDOWN_SECONDS;
+    }
+
+    this.carrierSkater = skater;
+    // Start from where the puck touched, so it visibly swings around to the front.
+    this.carryAngle = Math.atan2(this.position.y - skater.position.y, this.position.x - skater.position.x);
+  }
+
+  /** Makes the puck loose with the given velocity; the hook for shots, passes and poke checks. */
+  release(velocity: Vec2): void {
+    this.lastCarrier = this.carrierSkater;
+    this.regrabCooldown = REGRAB_COOLDOWN_SECONDS;
+    this.carrierSkater = undefined;
+    this.velocity.x = velocity.x;
+    this.velocity.y = velocity.y;
+    this.limitSpeed();
+  }
+
+  /** Releases the puck from where it sits on the stick toward `direction` (a unit vector) at `speed`. */
+  shoot(direction: Vec2, speed: number): void {
+    if (this.carrierSkater) {
+      this.release({ x: direction.x * speed, y: direction.y * speed });
+    }
+  }
+
   update(deltaSeconds: number): void {
+    this.regrabCooldown = Math.max(0, this.regrabCooldown - deltaSeconds);
+
+    if (this.carrierSkater) {
+      this.followCarrier(this.carrierSkater, deltaSeconds);
+      return;
+    }
+
     this.applyFriction(PUCK_FRICTION * deltaSeconds);
     this.position.x += this.velocity.x * deltaSeconds;
     this.position.y += this.velocity.y * deltaSeconds;
@@ -42,6 +103,34 @@ export class Puck implements CircleBody {
       this.velocity.x *= PUCK_MAX_SPEED / speed;
       this.velocity.y *= PUCK_MAX_SPEED / speed;
     }
+  }
+
+  private followCarrier(carrier: Skater, deltaSeconds: number): void {
+    const targetAngle = Math.atan2(carrier.facing.y, carrier.facing.x);
+    const turn = wrapAngle(targetAngle - this.carryAngle);
+    const maxTurn = carrier.tuning.puckHandlingTurnRate * deltaSeconds;
+    this.carryAngle = wrapAngle(this.carryAngle + Math.max(-maxTurn, Math.min(maxTurn, turn)));
+    this.placeOnStick(carrier);
+    this.velocity.x = carrier.velocity.x;
+    this.velocity.y = carrier.velocity.y;
+  }
+
+  /** Puts the puck at `carryAngle` beside the carrier, stopping at any net wall in between. */
+  private placeOnStick(carrier: Skater): void {
+    const distance = carrier.radius + this.radius + CARRY_GAP;
+    const target = {
+      x: carrier.position.x + Math.cos(this.carryAngle) * distance,
+      y: carrier.position.y + Math.sin(this.carryAngle) * distance,
+    };
+    // Stop the puck at any net wall between the carrier and the stick, so it can't be carried
+    // through the back or sides of the net. The front is open, so it can still be carried in.
+    const reach = RINK_NET_WALLS.reduce(
+      (nearest, wall) => Math.min(nearest, sweepCircleIntoRect(carrier.position, target, this.radius, wall) ?? 1),
+      1,
+    );
+    this.position.x = carrier.position.x + (target.x - carrier.position.x) * reach;
+    this.position.y = carrier.position.y + (target.y - carrier.position.y) * reach;
+    this.collideWithRink();
   }
 
   private applyFriction(amount: number): void {

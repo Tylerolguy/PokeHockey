@@ -88,34 +88,73 @@ export function pushOutOfRect(body: CircleBody, rect: Rect, restitution: number)
   return true;
 }
 
+/** A range of directions: `offset` radians from some reference direction, plus or minus `halfAngle`. */
+export interface Arc {
+  offset: number;
+  halfAngle: number;
+}
+
 /**
- * Separates two overlapping circles, treating `heavy` as immovable: `light` is pushed out and
- * bounces off `heavy`'s velocity. Returns the unit normal from heavy to light, or undefined if apart.
+ * Rotates unit vector `direction` as little as possible so it lies inside one of `arcs`, each
+ * measured from unit vector `reference`. Directions already inside an arc are unchanged.
  */
-export function resolveCircleHit(heavy: CircleBody, light: CircleBody, restitution: number): Vec2 | undefined {
-  const dx = light.position.x - heavy.position.x;
-  const dy = light.position.y - heavy.position.y;
-  const minDistance = heavy.radius + light.radius;
-  const distance = Math.hypot(dx, dy);
+export function clampDirectionToArcs(direction: Vec2, reference: Vec2, arcs: Arc[]): Vec2 {
+  const referenceAngle = Math.atan2(reference.y, reference.x);
+  const angle = Math.atan2(direction.y, direction.x);
+  let best = { angle, rotation: Infinity };
 
-  if (distance >= minDistance) {
-    return undefined;
+  for (const arc of arcs) {
+    const arcCenter = referenceAngle + arc.offset;
+    const fromCenter = wrapAngle(angle - arcCenter);
+    const clamped = arcCenter + clamp(fromCenter, -arc.halfAngle, arc.halfAngle);
+    const rotation = Math.abs(wrapAngle(angle - clamped));
+
+    if (rotation < best.rotation) {
+      best = { angle: clamped, rotation };
+    }
   }
 
-  // Exactly on top of each other: pick any direction.
-  const normal = distance > 0 ? { x: dx / distance, y: dy / distance } : { x: 1, y: 0 };
-  light.position.x = heavy.position.x + normal.x * minDistance;
-  light.position.y = heavy.position.y + normal.y * minDistance;
+  return { x: Math.cos(best.angle), y: Math.sin(best.angle) };
+}
 
-  const closingSpeed =
-    (light.velocity.x - heavy.velocity.x) * normal.x + (light.velocity.y - heavy.velocity.y) * normal.y;
+/** Wraps an angle into -PI..PI. */
+export function wrapAngle(angle: number): number {
+  return Math.atan2(Math.sin(angle), Math.cos(angle));
+}
 
-  if (closingSpeed < 0) {
-    light.velocity.x -= (1 + restitution) * closingSpeed * normal.x;
-    light.velocity.y -= (1 + restitution) * closingSpeed * normal.y;
+/**
+ * How far (0..1) a circle of `radius` can travel from `from` to `to` before touching `rect`, or
+ * undefined if the path is clear. Returns 0 if it already overlaps at the start.
+ */
+export function sweepCircleIntoRect(from: Vec2, to: Vec2, radius: number, rect: Rect): number | undefined {
+  // Moving a circle against a rect is the same as moving a point against the rect grown by the radius.
+  const slabs = [
+    { start: from.x, delta: to.x - from.x, min: rect.left - radius, max: rect.right + radius },
+    { start: from.y, delta: to.y - from.y, min: rect.top - radius, max: rect.bottom + radius },
+  ];
+  let entry = 0;
+  let exit = 1;
+
+  for (const { start, delta, min, max } of slabs) {
+    if (delta === 0) {
+      if (start < min || start > max) {
+        return undefined;
+      }
+
+      continue;
+    }
+
+    const a = (min - start) / delta;
+    const b = (max - start) / delta;
+    entry = Math.max(entry, Math.min(a, b));
+    exit = Math.min(exit, Math.max(a, b));
+
+    if (entry > exit) {
+      return undefined;
+    }
   }
 
-  return normal;
+  return entry;
 }
 
 /** Reflects the part of the velocity heading along `wallNormal` (pointing into the wall). */

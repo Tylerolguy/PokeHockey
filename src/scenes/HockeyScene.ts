@@ -19,7 +19,13 @@ const AIM_LINE_LENGTH = 70;
 const AIM_LINE_CHARGED_LENGTH = 150;
 const CHARGE_BAR_WIDTH = 48;
 const SHOT_ARC_EDGE_LENGTH = 110;
-const FACING_MARKER_DISTANCE = 30;
+/** Ring on the ice around the controlled skater, with a pointer on its edge for the exact facing. */
+const CONTROL_RING_RADIUS = 28;
+/** How far the pointer's tip reaches past the ring; its sides meet the ring tangentially. */
+const CONTROL_RING_POINTER_LENGTH = 18;
+const CONTROL_RING_THICKNESS = 5;
+const CONTROL_RING_COLOR = 0x3d8bff;
+const CONTROL_RING_ALPHA = 0.9;
 
 type MovementScheme = MovementControls['scheme'];
 const MOVEMENT_SCHEMES: MovementScheme[] = ['mouseFacing', 'directional', 'tank'];
@@ -36,7 +42,7 @@ export class HockeyScene extends Phaser.Scene {
   private aimGraphics!: Phaser.GameObjects.Graphics;
   private moveKeys!: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
   private boundsDebug!: Phaser.GameObjects.Graphics;
-  private facingMarker!: Phaser.GameObjects.Graphics;
+  private controlRing!: Phaser.GameObjects.Graphics;
   private helpText!: Phaser.GameObjects.Text;
   private movementScheme: MovementScheme = MOVEMENT_SCHEMES[0];
 
@@ -55,7 +61,7 @@ export class HockeyScene extends Phaser.Scene {
 
     createPokemonAnimations(this, PLAYER_MODEL);
     this.engine = new HockeyEngine();
-    this.facingMarker = this.drawFacingMarker();
+    this.controlRing = this.drawControlRing();
     this.puckSprite = this.drawPuck();
     this.sprite = this.add.sprite(0, 0, getPokemonTextureKey(PLAYER_MODEL));
     this.sprite.setScale(SPRITE_SCALE);
@@ -132,8 +138,8 @@ export class HockeyScene extends Phaser.Scene {
     const puckPosition = this.getDrawPosition(puck);
     this.sprite.setPosition(skaterPosition.x, skaterPosition.y);
     this.puckSprite.setPosition(puckPosition.x, puckPosition.y);
-    this.facingMarker.setPosition(skaterPosition.x, skaterPosition.y);
-    this.facingMarker.setRotation(Math.atan2(skater.facing.y, skater.facing.x));
+    this.controlRing.setPosition(skaterPosition.x, skaterPosition.y);
+    this.controlRing.setRotation(Math.atan2(skater.facing.y, skater.facing.x));
   }
 
   /**
@@ -144,18 +150,32 @@ export class HockeyScene extends Phaser.Scene {
     return lerpVec(body.previousPosition, body.position, this.engine.interpolationAlpha);
   }
 
-  /** Small arrow on the ice showing the exact facing, which the 8-direction sprite can only approximate. */
-  private drawFacingMarker(): Phaser.GameObjects.Graphics {
+  /**
+   * Blue ring marking the controlled skater, drawn pointing along +x and rotated to the facing.
+   * The pointer shows the exact facing, which the 8-direction sprite can only approximate.
+   */
+  private drawControlRing(): Phaser.GameObjects.Graphics {
     const graphics = this.add.graphics();
-    graphics.fillStyle(0xffffff, 0.75);
-    graphics.fillTriangle(
-      FACING_MARKER_DISTANCE + 8,
-      0,
-      FACING_MARKER_DISTANCE,
-      -5,
-      FACING_MARKER_DISTANCE,
-      5,
-    );
+    graphics.fillStyle(CONTROL_RING_COLOR, 0.18);
+    graphics.fillCircle(0, 0, CONTROL_RING_RADIUS);
+    graphics.lineStyle(CONTROL_RING_THICKNESS, CONTROL_RING_COLOR, CONTROL_RING_ALPHA);
+    graphics.strokeCircle(0, 0, CONTROL_RING_RADIUS);
+
+    // Pointer: from the tip, two lines tangent to the ring's outer edge, closed along that edge,
+    // so it flows out of the ring like a teardrop instead of sitting on top of it.
+    const outerRadius = CONTROL_RING_RADIUS + CONTROL_RING_THICKNESS / 2;
+    const tipDistance = CONTROL_RING_RADIUS + CONTROL_RING_POINTER_LENGTH;
+    const tangentAngle = Math.acos(outerRadius / tipDistance);
+    const arcSteps = 12;
+    const points = [new Phaser.Math.Vector2(tipDistance, 0)];
+
+    for (let i = 0; i <= arcSteps; i++) {
+      const angle = -tangentAngle + (2 * tangentAngle * i) / arcSteps;
+      points.push(new Phaser.Math.Vector2(Math.cos(angle) * outerRadius, Math.sin(angle) * outerRadius));
+    }
+
+    graphics.fillStyle(CONTROL_RING_COLOR, CONTROL_RING_ALPHA);
+    graphics.fillPoints(points, true);
 
     return graphics;
   }

@@ -15,4 +15,6 @@ function defineSpecies(model: string, overrides: Partial<SkaterTuning>): Pokemon
 export const POKEMON_SPECIES = {
   garchomp: defineSpecies('Garchomp', { mass: 95 }),
   flygon: defineSpecies('Flygon', { mass: 82 }),
+  trapinch: defineSpecies('Trapinch', { mass: 15 }),
+  vibrava: defineSpecies('Vibrava', { mass: 15.3 }),
 } satisfies Record<string, PokemonSpecies>;

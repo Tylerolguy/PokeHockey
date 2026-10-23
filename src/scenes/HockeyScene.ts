@@ -23,11 +23,14 @@ import {
 
 /**
  * Who starts on the ice and for which team; the first is the one the player controls. Team lives
- * here rather than on the species so any species can play on either side. Flygon has no AI yet.
+ * here rather than on the species so any species can play on either side. Opponents only move
+ * while the T testing toggle is on.
  */
 const LINEUP: { species: PokemonSpecies; team: Team; x: number; y: number; facingX: number }[] = [
   { species: POKEMON_SPECIES.garchomp, team: 'player', x: RINK_WIDTH / 2 - 140, y: RINK_HEIGHT / 2, facingX: 1 },
   { species: POKEMON_SPECIES.flygon, team: 'opponent', x: RINK_WIDTH / 2 + 140, y: RINK_HEIGHT / 2, facingX: -1 },
+  { species: POKEMON_SPECIES.trapinch, team: 'opponent', x: RINK_WIDTH / 2 + 300, y: RINK_HEIGHT / 2 - 160, facingX: -1 },
+  { species: POKEMON_SPECIES.vibrava, team: 'opponent', x: RINK_WIDTH / 2 + 300, y: RINK_HEIGHT / 2 + 160, facingX: -1 },
 ];
 const SPRITE_SCALE = 1.7;
 /** Draw order: ice markings, then skaters and puck sorted by screen y, then aim and HUD on top. */
@@ -107,6 +110,11 @@ export class HockeyScene extends Phaser.Scene {
     this.moveKeys = keyboard.addKeys({ up: 'W', down: 'S', left: 'A', right: 'D' }) as typeof this.moveKeys;
     keyboard.on('keydown-B', () => this.boundsDebug.setVisible(!this.boundsDebug.visible));
     keyboard.on('keydown-R', () => this.engine.resetPuck());
+    // Temporary testing toggle.
+    keyboard.on('keydown-T', () => {
+      this.engine.opponentsChasePuck = !this.engine.opponentsChasePuck;
+      this.updateHelpText();
+    });
     keyboard.on('keydown-M', () => {
       const next = (MOVEMENT_SCHEMES.indexOf(this.movementScheme) + 1) % MOVEMENT_SCHEMES.length;
       this.movementScheme = MOVEMENT_SCHEMES[next];
@@ -129,7 +137,8 @@ export class HockeyScene extends Phaser.Scene {
   private updateHelpText(): void {
     this.helpText.setText(
       `${MOVEMENT_SCHEME_HELP[this.movementScheme]}   M: switch controls (${this.movementScheme})   ` +
-        'Mouse: aim   Left click: shoot (hold to charge)   Right click: pass   R: reset puck   B: boundaries',
+        'Mouse: aim   Left click: shoot (hold to charge)   Right click: pass   R: reset puck   ' +
+        `T: enemy chases puck (${this.engine.opponentsChasePuck ? 'on' : 'off'})   B: boundaries`,
     );
   }
 

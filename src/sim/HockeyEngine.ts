@@ -1,4 +1,5 @@
 import { clamp, clampDirectionToArcs, resolveCircleCollision, wrapAngle, type Vec2 } from './geometry';
+import { chasePuckControls, idleControls } from './PlayerAI';
 import { Puck } from './Puck';
 import { Skater } from './Skater';
 import { RINK_HEIGHT, RINK_WIDTH } from './rink';
@@ -13,7 +14,6 @@ const PASS_FULL_SPEED_DISTANCE = 700;
 const SKATER_RESTITUTION = 0.3;
 /** The center faceoff dot. */
 const CENTER_ICE: Vec2 = { x: RINK_WIDTH / 2, y: RINK_HEIGHT / 2 };
-const NO_MOVE: MovementControls = { scheme: 'directional', direction: { x: 0, y: 0 } };
 
 /** Ways of steering a skater; the player can switch between them to compare feel. */
 export type MovementControls =
@@ -40,6 +40,8 @@ export class HockeyEngine {
   public readonly puck = new Puck(CENTER_ICE);
   /** The skater the player's input drives; switching skaters will change this. */
   public controlledSkater: Skater;
+  /** Temporary testing switch: when on, opponents skate after the puck; when off, they stand still. */
+  public opponentsChasePuck = false;
 
   /** `skaters` is everyone on the ice; the first starts as the player's. */
   constructor(public readonly skaters: Skater[]) {
@@ -102,13 +104,24 @@ export class HockeyEngine {
 
     this.handleStickControls(this.controlledSkater, controls, deltaSeconds);
     this.skaters.forEach((skater) => {
-      const move = skater === this.controlledSkater ? controls.move : NO_MOVE;
-      const { direction, moveScale } = this.steer(skater, move, controls.aim, deltaSeconds);
+      const { move, aim } = this.getControls(skater, controls);
+      const { direction, moveScale } = this.steer(skater, move, aim, deltaSeconds);
       skater.update(direction, deltaSeconds, moveScale);
     });
     this.resolveSkaterCollisions();
     this.updatePossession();
     this.puck.update(deltaSeconds);
+  }
+
+  /** The player's controls for the controlled skater; AI or idle controls for everyone else. */
+  private getControls(skater: Skater, playerControls: SkaterControls): SkaterControls {
+    if (skater === this.controlledSkater) {
+      return playerControls;
+    }
+
+    return skater.team === 'opponent' && this.opponentsChasePuck
+      ? chasePuckControls(skater, this.puck)
+      : idleControls(skater);
   }
 
   /**

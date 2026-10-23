@@ -7,7 +7,7 @@ import {
   loadPokemonModel,
 } from '../pokemon/pokemonSprites';
 import { HockeyEngine, type MovementControls, type SkaterControls } from '../sim/HockeyEngine';
-import { clamp } from '../sim/geometry';
+import { clamp, lerpVec, type CircleBody, type Vec2 } from '../sim/geometry';
 import { PUCK_RADIUS } from '../sim/Puck';
 import { RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RINK_ICE, RINK_NET_WALLS, RINK_NETS } from '../sim/rink';
 
@@ -24,7 +24,7 @@ const FACING_MARKER_DISTANCE = 30;
 type MovementScheme = MovementControls['scheme'];
 const MOVEMENT_SCHEMES: MovementScheme[] = ['mouseFacing', 'directional', 'tank'];
 const MOVEMENT_SCHEME_HELP: Record<MovementScheme, string> = {
-  mouseFacing: 'WASD: skate (fastest toward the mouse)',
+  mouseFacing: 'WASD: skate (facing the mouse)',
   directional: 'WASD: skate up/left/down/right',
   tank: 'W/S: skate forward/backward   A/D: turn',
 };
@@ -128,10 +128,20 @@ export class HockeyScene extends Phaser.Scene {
 
   private syncSprites(): void {
     const { controlledSkater: skater, puck } = this.engine;
-    this.sprite.setPosition(skater.position.x, skater.position.y);
-    this.puckSprite.setPosition(puck.position.x, puck.position.y);
-    this.facingMarker.setPosition(skater.position.x, skater.position.y);
+    const skaterPosition = this.getDrawPosition(skater);
+    const puckPosition = this.getDrawPosition(puck);
+    this.sprite.setPosition(skaterPosition.x, skaterPosition.y);
+    this.puckSprite.setPosition(puckPosition.x, puckPosition.y);
+    this.facingMarker.setPosition(skaterPosition.x, skaterPosition.y);
     this.facingMarker.setRotation(Math.atan2(skater.facing.y, skater.facing.x));
+  }
+
+  /**
+   * Where to draw a body this frame: between its last two simulation steps, so motion stays
+   * smooth when the screen refreshes at a different rate than the 120 Hz simulation.
+   */
+  private getDrawPosition(body: CircleBody): Vec2 {
+    return lerpVec(body.previousPosition, body.position, this.engine.interpolationAlpha);
   }
 
   /** Small arrow on the ice showing the exact facing, which the 8-direction sprite can only approximate. */
@@ -165,7 +175,7 @@ export class HockeyScene extends Phaser.Scene {
     const direction = this.engine.getShotDirection(skater, aim);
     const charge = skater.shotCharge === undefined ? undefined : clamp(skater.shotCharge / skater.tuning.shotChargeSeconds, 0, 1);
     const length = AIM_LINE_LENGTH + (AIM_LINE_CHARGED_LENGTH - AIM_LINE_LENGTH) * (charge ?? 0);
-    const start = puck.position;
+    const start = this.getDrawPosition(puck);
 
     const shotArcs = skater.tuning.shotArcs;
 
@@ -190,8 +200,9 @@ export class HockeyScene extends Phaser.Scene {
     this.aimGraphics.lineBetween(start.x, start.y, start.x + direction.x * length, start.y + direction.y * length);
 
     if (charge !== undefined) {
-      const barX = skater.position.x - CHARGE_BAR_WIDTH / 2;
-      const barY = skater.position.y - 58;
+      const skaterPosition = this.getDrawPosition(skater);
+      const barX = skaterPosition.x - CHARGE_BAR_WIDTH / 2;
+      const barY = skaterPosition.y - 58;
       this.aimGraphics.fillStyle(0x000000, 0.6);
       this.aimGraphics.fillRect(barX - 2, barY - 2, CHARGE_BAR_WIDTH + 4, 10);
       this.aimGraphics.fillStyle(charge >= 1 ? 0xff4b2b : 0xffa424, 1);

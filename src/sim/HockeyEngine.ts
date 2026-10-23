@@ -19,10 +19,7 @@ export type MovementControls =
   | { scheme: 'directional'; direction: Vec2 }
   /** `throttle` 1 skates forward along facing, -1 backward (still facing forward); `turn` -1/1 rotates counter-/clockwise. */
   | { scheme: 'tank'; throttle: number; turn: number }
-  /**
-   * Move along a screen direction while turning to face the aim point. Moving the way you face
-   * is fastest; the further the move direction is from facing, the lower acceleration and top speed.
-   */
+  /** Move along a screen direction at full speed in any direction while turning to face the aim point. */
   | { scheme: 'mouseFacing'; direction: Vec2 };
 
 /** One frame of controls for a skater, from a player or (later) AI. */
@@ -84,7 +81,20 @@ export class HockeyEngine {
     return length >= 1 ? { x: dx / length, y: dy / length } : { ...skater.facing };
   }
 
+  /**
+   * How far (0..1) real time has run past the latest simulation step. Draw bodies at
+   * `lerpVec(previousPosition, position, interpolationAlpha)` for smooth motion at any refresh rate.
+   */
+  get interpolationAlpha(): number {
+    return this.accumulatedSeconds / STEP_SECONDS;
+  }
+
   private step(controls: SkaterControls, deltaSeconds: number): void {
+    for (const body of [...this.skaters, this.puck]) {
+      body.previousPosition.x = body.position.x;
+      body.previousPosition.y = body.position.y;
+    }
+
     this.handleStickControls(this.controlledSkater, controls, deltaSeconds);
     this.skaters.forEach((skater) => {
       const move = skater === this.controlledSkater ? controls.move : NO_MOVE;
@@ -108,7 +118,7 @@ export class HockeyEngine {
     if (move.scheme === 'mouseFacing') {
       this.turnToward(skater, aim, deltaSeconds);
 
-      return { direction: move.direction, moveScale: this.getFacingMoveScale(skater, move.direction) };
+      return { direction: move.direction, moveScale: 1 };
     }
 
     if (move.scheme === 'directional') {
@@ -124,7 +134,7 @@ export class HockeyEngine {
     let moveScale = 1;
 
     if (move.turn !== 0) {
-      const angle = Math.atan2(skater.facing.y, skater.facing.x) + move.turn * skater.turnRate * deltaSeconds;
+      const angle = Math.atan2(skater.facing.y, skater.facing.x) + move.turn * skater.tuning.turnRate * deltaSeconds;
       skater.setFacing(Math.cos(angle), Math.sin(angle));
       moveScale *= skater.tuning.turningMoveScale;
     }
@@ -136,7 +146,7 @@ export class HockeyEngine {
     return { direction: { x: skater.facing.x * move.throttle, y: skater.facing.y * move.throttle }, moveScale };
   }
 
-  /** Rotates the skater's facing toward `target`, no faster than their speed-dependent turn rate. */
+  /** Rotates the skater's facing toward `target`, no faster than their turn rate. */
   private turnToward(skater: Skater, target: Vec2, deltaSeconds: number): void {
     const dx = target.x - skater.position.x;
     const dy = target.y - skater.position.y;
@@ -147,26 +157,9 @@ export class HockeyEngine {
     }
 
     const current = Math.atan2(skater.facing.y, skater.facing.x);
-    const maxTurn = skater.turnRate * deltaSeconds;
+    const maxTurn = skater.tuning.turnRate * deltaSeconds;
     const angle = current + clamp(wrapAngle(Math.atan2(dy, dx) - current), -maxTurn, maxTurn);
     skater.setFacing(Math.cos(angle), Math.sin(angle));
-  }
-
-  /**
-   * Speed multiplier for moving in `direction` given where the skater faces: `facingMoveScale`
-   * straight ahead, `reverseMoveScale` straight back, easing between them (sideways is halfway).
-   */
-  private getFacingMoveScale(skater: Skater, direction: Vec2): number {
-    const length = Math.hypot(direction.x, direction.y);
-
-    if (length === 0) {
-      return 1;
-    }
-
-    const alignment = (direction.x * skater.facing.x + direction.y * skater.facing.y) / length;
-    const { facingMoveScale, reverseMoveScale } = skater.tuning;
-
-    return reverseMoveScale + (facingMoveScale - reverseMoveScale) * ((alignment + 1) / 2);
   }
 
   private handleStickControls(skater: Skater, controls: SkaterControls, deltaSeconds: number): void {

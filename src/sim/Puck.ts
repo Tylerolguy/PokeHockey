@@ -17,6 +17,7 @@ const REGRAB_COOLDOWN_SECONDS = 0.3;
 
 export class Puck implements CircleBody {
   public readonly position: Vec2;
+  public readonly previousPosition: Vec2;
   public readonly velocity: Vec2 = { x: 0, y: 0 };
   public readonly radius = PUCK_RADIUS;
   /** The skater in possession, or undefined while the puck is loose. */
@@ -28,6 +29,7 @@ export class Puck implements CircleBody {
 
   constructor(start: Vec2) {
     this.position = { ...start };
+    this.previousPosition = { ...start };
   }
 
   get speed(): number {
@@ -67,6 +69,9 @@ export class Puck implements CircleBody {
     this.regrabCooldown = 0;
     this.position.x = position.x;
     this.position.y = position.y;
+    // Teleport: don't draw the puck sliding across the ice from where it was.
+    this.previousPosition.x = position.x;
+    this.previousPosition.y = position.y;
     this.velocity.x = 0;
     this.velocity.y = 0;
   }

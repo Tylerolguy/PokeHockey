@@ -17,8 +17,15 @@ export interface RoundedRect extends Rect {
 /** A circle-shaped body that can be pushed out of walls. */
 export interface CircleBody {
   position: Vec2;
+  /** Position before the latest simulation step, for drawing between steps. */
+  previousPosition: Vec2;
   velocity: Vec2;
   radius: number;
+}
+
+/** Point `t` (0..1) of the way from `from` to `to`. */
+export function lerpVec(from: Vec2, to: Vec2, t: number): Vec2 {
+  return { x: from.x + (to.x - from.x) * t, y: from.y + (to.y - from.y) * t };
 }
 
 export function clamp(value: number, min: number, max: number): number {

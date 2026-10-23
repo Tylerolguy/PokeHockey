@@ -1,28 +1,30 @@
-import { containInRoundedRect, pushOutOfRect, type Arc, type CircleBody, type Vec2 } from './geometry';
+import { containInRoundedRect, pushOutOfRect, wrapAngle, type Arc, type CircleBody, type Vec2 } from './geometry';
 import { BOARD_RESTITUTION, NET_RESTITUTION, RINK_ICE, RINK_NETS } from './rink';
 
 export interface SkaterTuning {
-  /** px/s² while a direction is held */
-  acceleration: number;
+  /**
+   * px/s² while a direction is held: strong from a standstill so a key press moves the skater
+   * immediately, fading to `accelerationAtMaxSpeed` so top speed still takes time to reach
+   */
+  accelerationFromStop: number;
+  accelerationAtMaxSpeed: number;
+  /**
+   * px/s² of sideways grip when changing direction: velocity swings toward the new direction
+   * keeping its speed (momentum carries over), turning tighter when slow and wider when fast
+   */
+  carveGrip: number;
+  /** px/s² at which skaters dig in to stop velocity heading against the way they're pushing */
+  brakingDeceleration: number;
   /** px/s² of slowdown while gliding with no input */
   glideFriction: number;
   /** px/s */
   maxSpeed: number;
   /** collision radius in px */
   radius: number;
-  /**
-   * rad/s a skater rotates when steering by turning (tank controls): quick when standing still,
-   * slowing linearly to `turnRateAtMaxSpeed` at full speed.
-   */
-  turnRateStanding: number;
-  turnRateAtMaxSpeed: number;
-  /**
-   * acceleration and top speed multiplier while skating backward; with mouse facing, the
-   * multiplier slides from `facingMoveScale` (moving where you face) to this (moving away)
-   */
+  /** rad/s a skater's facing rotates (toward the mouse, or when turning with tank controls), at any speed */
+  turnRate: number;
+  /** acceleration and top speed multiplier while skating backward (tank controls) */
   reverseMoveScale: number;
-  /** acceleration and top speed multiplier while moving the way the skater faces (mouse facing) */
-  facingMoveScale: number;
   /** acceleration and top speed multiplier while turning (tank controls) */
   turningMoveScale: number;
   /** rad/s the carried puck swings around to the new facing; a future puck-control stat */
@@ -47,27 +49,29 @@ export interface SkaterTuning {
 }
 
 export const DEFAULT_SKATER_TUNING: SkaterTuning = {
-  acceleration: 500,
-  glideFriction: 420,
-  maxSpeed: 360,
+  accelerationFromStop: 1100,
+  accelerationAtMaxSpeed: 110,
+  carveGrip: 900,
+  brakingDeceleration: 650,
+  glideFriction: 160,
+  maxSpeed: 340,
   radius: 22,
-  turnRateStanding: 6,
-  turnRateAtMaxSpeed: 2.6,
+  turnRate: 7,
   reverseMoveScale: 0.55,
-  facingMoveScale: 1,
   turningMoveScale: 0.75,
   puckHandlingTurnRate: 14,
   shotMinSpeed: 650,
   shotMaxSpeed: 1100,
   shotChargeSeconds: 0.8,
   chargingMoveScale: 0.55,
-  passMinSpeed: 400,
-  passMaxSpeed: 750,
+  passMinSpeed: 500,
+  passMaxSpeed: 800,
 };
 
 /** Plain simulation state for one skater: no Phaser types, so it can run headless. */
 export class Skater implements CircleBody {
   public readonly position: Vec2;
+  public readonly previousPosition: Vec2;
   public readonly velocity: Vec2 = { x: 0, y: 0 };
   public readonly radius: number;
   /**
@@ -84,6 +88,7 @@ export class Skater implements CircleBody {
     public readonly tuning: SkaterTuning = DEFAULT_SKATER_TUNING,
   ) {
     this.position = { ...start };
+    this.previousPosition = { ...start };
     this.radius = tuning.radius;
   }
 
@@ -94,14 +99,6 @@ export class Skater implements CircleBody {
 
   get speed(): number {
     return Math.hypot(this.velocity.x, this.velocity.y);
-  }
-
-  /** Current turning speed in rad/s: the faster the skater moves, the wider they turn. */
-  get turnRate(): number {
-    const { turnRateStanding, turnRateAtMaxSpeed, maxSpeed } = this.tuning;
-    const speedFraction = Math.min(this.speed / maxSpeed, 1);
-
-    return turnRateStanding + (turnRateAtMaxSpeed - turnRateStanding) * speedFraction;
   }
 
   /**
@@ -116,11 +113,14 @@ export class Skater implements CircleBody {
       moveScale *= this.tuning.chargingMoveScale;
     }
 
-    const acceleration = this.tuning.acceleration * moveScale;
-
     if (inputLength > 0) {
-      this.velocity.x += (input.x / inputLength) * acceleration * deltaSeconds;
-      this.velocity.y += (input.y / inputLength) * acceleration * deltaSeconds;
+      const direction = { x: input.x / inputLength, y: input.y / inputLength };
+      this.carveToward(direction, deltaSeconds);
+      this.brakeAgainst(direction, deltaSeconds);
+
+      const acceleration = this.getAcceleration() * moveScale;
+      this.velocity.x += direction.x * acceleration * deltaSeconds;
+      this.velocity.y += direction.y * acceleration * deltaSeconds;
     } else {
       this.applyFriction(this.tuning.glideFriction * deltaSeconds);
     }
@@ -135,6 +135,45 @@ export class Skater implements CircleBody {
 
     containInRoundedRect(this, RINK_ICE, BOARD_RESTITUTION);
     RINK_NETS.forEach((net) => pushOutOfRect(this, net, NET_RESTITUTION));
+  }
+
+  /** Acceleration fades linearly from `accelerationFromStop` to `accelerationAtMaxSpeed` as speed builds. */
+  private getAcceleration(): number {
+    const { accelerationFromStop, accelerationAtMaxSpeed, maxSpeed } = this.tuning;
+    const speedFraction = Math.min(this.speed / maxSpeed, 1);
+
+    return accelerationFromStop + (accelerationAtMaxSpeed - accelerationFromStop) * speedFraction;
+  }
+
+  /**
+   * Swings the velocity toward unit vector `direction` without changing speed, as fast as grip
+   * allows (turn rate = grip / speed), so momentum carries into the new direction.
+   */
+  private carveToward(direction: Vec2, deltaSeconds: number): void {
+    const speed = this.speed;
+
+    if (speed === 0) {
+      return;
+    }
+
+    const current = Math.atan2(this.velocity.y, this.velocity.x);
+    const maxTurn = (this.tuning.carveGrip / speed) * deltaSeconds;
+    const turn = Math.max(-maxTurn, Math.min(maxTurn, wrapAngle(Math.atan2(direction.y, direction.x) - current)));
+    this.velocity.x = Math.cos(current + turn) * speed;
+    this.velocity.y = Math.sin(current + turn) * speed;
+  }
+
+  /** Brakes only the part of the velocity heading against unit vector `direction`; sideways motion keeps its speed. */
+  private brakeAgainst(direction: Vec2, deltaSeconds: number): void {
+    const along = this.velocity.x * direction.x + this.velocity.y * direction.y;
+
+    if (along >= 0) {
+      return;
+    }
+
+    const reduction = Math.min(-along, this.tuning.brakingDeceleration * deltaSeconds);
+    this.velocity.x += direction.x * reduction;
+    this.velocity.y += direction.y * reduction;
   }
 
   private applyFriction(amount: number): void {

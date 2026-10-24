@@ -40,8 +40,18 @@ export class Puck implements CircleBody {
     return this.carrierSkater;
   }
 
+  /**
+   * Whether `skater` may take the puck on touch: anyone can grab a loose puck, only opponents can
+   * steal a carried one, and whoever just let go waits out the regrab cooldown.
+   */
   canBeTakenBy(skater: Skater): boolean {
-    return skater !== this.carrierSkater && !(skater === this.lastCarrier && this.regrabCooldown > 0);
+    const carrier = this.carrierSkater;
+
+    if (carrier && carrier.team === skater.team) {
+      return false;
+    }
+
+    return !(skater === this.lastCarrier && this.regrabCooldown > 0);
   }
 
   /** True if no net wall lies between `from` and the puck, e.g. so a skater can't grab it through the mesh. */

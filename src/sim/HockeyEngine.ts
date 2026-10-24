@@ -35,20 +35,65 @@ export interface SkaterControls {
   pass: boolean;
 }
 
+/** How Space picks the next skater to control: lineup order, or nearest the cursor. */
+export type SwitchMode = 'nextInList' | 'closestToAim';
+
 /** Runs one match's simulation. Knows nothing about Phaser. */
 export class HockeyEngine {
   public readonly puck = new Puck(CENTER_ICE);
-  /** The skater the player's input drives; switching skaters will change this. */
-  public controlledSkater: Skater;
   /** Temporary testing switch: when on, opponents skate after the puck; when off, they stand still. */
   public opponentsChasePuck = false;
+  private accumulatedSeconds = 0;
+  private wasPassHeld = false;
 
   /** `skaters` is everyone on the ice; the first starts as the player's. */
   constructor(public readonly skaters: Skater[]) {
-    this.controlledSkater = skaters[0];
+    this.setControlledSkater(skaters[0]);
   }
-  private accumulatedSeconds = 0;
-  private wasPassHeld = false;
+
+  /** The skater the player's input drives: whichever has `controlledByPlayer` set. */
+  get controlledSkater(): Skater {
+    return this.skaters.find((skater) => skater.controlledByPlayer) ?? this.skaters[0];
+  }
+
+  /** Hands the player's control to `skater` (on the player's team), taking it from everyone else. */
+  setControlledSkater(skater: Skater): void {
+    this.skaters.forEach((other) => {
+      other.controlledByPlayer = other === skater;
+    });
+  }
+
+  /**
+   * Switches the player to another skater on their team, unless the one they control has the
+   * puck. `aim` is the cursor, used by 'closestToAim'. Returns whether control changed.
+   */
+  switchControlledSkater(mode: SwitchMode, aim: Vec2): boolean {
+    const current = this.controlledSkater;
+
+    if (this.puck.carrier === current) {
+      return false;
+    }
+
+    const team = this.skaters.filter((skater) => skater.team === current.team);
+    const next =
+      mode === 'nextInList'
+        ? team[(team.indexOf(current) + 1) % team.length]
+        : team
+            .filter((skater) => skater !== current)
+            .sort(
+              (a, b) =>
+                Math.hypot(a.position.x - aim.x, a.position.y - aim.y) - Math.hypot(b.position.x - aim.x, b.position.y - aim.y),
+            )[0];
+
+    if (!next || next === current) {
+      return false;
+    }
+
+    current.shotCharge = undefined;
+    this.setControlledSkater(next);
+
+    return true;
+  }
 
   update(controls: SkaterControls, deltaSeconds: number): void {
     this.accumulatedSeconds += Math.min(deltaSeconds, MAX_FRAME_SECONDS);
@@ -240,6 +285,11 @@ export class HockeyEngine {
 
     if (taker) {
       this.puck.giveTo(taker);
+
+      // For now the player always controls whichever of their skaters has the puck.
+      if (taker.team === 'player') {
+        this.setControlledSkater(taker);
+      }
     }
   }
 

@@ -88,6 +88,11 @@ export class Skater implements CircleBody {
   public readonly facing: Vec2 = { x: 1, y: 0 };
   /** Seconds the shot has been wound up, or undefined when not charging. */
   public shotCharge?: number;
+  /**
+   * True for the one skater on the player's team the player is driving. The engine keeps exactly
+   * one set; use `HockeyEngine.controlledSkater` to find it.
+   */
+  public controlledByPlayer = false;
 
   constructor(
     start: Vec2,

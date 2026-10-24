@@ -7,7 +7,7 @@ import {
   loadPokemonModel,
 } from '../pokemon/pokemonSprites';
 import { POKEMON_SPECIES, type PokemonSpecies } from '../data/pokemonSpecies';
-import { HockeyEngine, type MovementControls, type SkaterControls } from '../sim/HockeyEngine';
+import { HockeyEngine, type MovementControls, type SkaterControls, type SwitchMode } from '../sim/HockeyEngine';
 import { Skater, type Team } from '../sim/Skater';
 import { clamp, lerpVec, type CircleBody, type Vec2 } from '../sim/geometry';
 import { PUCK_RADIUS } from '../sim/Puck';
@@ -61,6 +61,10 @@ const TEAM_COLORS: Record<Team, number> = {
 };
 
 type MovementScheme = MovementControls['scheme'];
+const SWITCH_MODE_LABELS: Record<SwitchMode, string> = {
+  nextInList: 'next in list',
+  closestToAim: 'closest to mouse',
+};
 const MOVEMENT_SCHEMES: MovementScheme[] = ['mouseFacing', 'directional', 'tank'];
 const MOVEMENT_SCHEME_HELP: Record<MovementScheme, string> = {
   mouseFacing: 'WASD: skate (facing the mouse)',
@@ -83,6 +87,8 @@ export class HockeyScene extends Phaser.Scene {
   private boundsDebug!: Phaser.GameObjects.Graphics;
   private helpText!: Phaser.GameObjects.Text;
   private movementScheme: MovementScheme = MOVEMENT_SCHEMES[0];
+  /** Testing toggle (C) between the two ways Space picks who to switch to. */
+  private switchMode: SwitchMode = 'nextInList';
 
   constructor() {
     super('HockeyScene');
@@ -118,6 +124,15 @@ export class HockeyScene extends Phaser.Scene {
     this.moveKeys = keyboard.addKeys({ up: 'W', down: 'S', left: 'A', right: 'D' }) as typeof this.moveKeys;
     keyboard.on('keydown-B', () => this.boundsDebug.setVisible(!this.boundsDebug.visible));
     keyboard.on('keydown-R', () => this.engine.resetPuck());
+    keyboard.addCapture('SPACE');
+    keyboard.on('keydown-SPACE', () => {
+      const pointer = this.input.activePointer;
+      this.engine.switchControlledSkater(this.switchMode, { x: pointer.worldX, y: pointer.worldY });
+    });
+    keyboard.on('keydown-C', () => {
+      this.switchMode = this.switchMode === 'nextInList' ? 'closestToAim' : 'nextInList';
+      this.updateHelpText();
+    });
     // Temporary testing toggle.
     keyboard.on('keydown-T', () => {
       this.engine.opponentsChasePuck = !this.engine.opponentsChasePuck;
@@ -145,8 +160,9 @@ export class HockeyScene extends Phaser.Scene {
   private updateHelpText(): void {
     this.helpText.setText(
       `${MOVEMENT_SCHEME_HELP[this.movementScheme]}   M: switch controls (${this.movementScheme})   ` +
-        'Mouse: aim   Left click: shoot (hold to charge)   Right click: pass   R: reset puck   ' +
-        `T: enemy chases puck (${this.engine.opponentsChasePuck ? 'on' : 'off'})   B: boundaries`,
+        'Mouse: aim   Left click: shoot (hold to charge)   Right click: pass\n' +
+        `Space: switch player (without the puck)   C: switch mode (${SWITCH_MODE_LABELS[this.switchMode]})   ` +
+        `R: reset puck   T: enemy chases puck (${this.engine.opponentsChasePuck ? 'on' : 'off'})   B: boundaries`,
     );
   }
 

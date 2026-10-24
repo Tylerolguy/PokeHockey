@@ -7,7 +7,13 @@ import {
   loadPokemonModel,
 } from '../pokemon/pokemonSprites';
 import { POKEMON_SPECIES, type PokemonSpecies } from '../data/pokemonSpecies';
-import { HockeyEngine, type MovementControls, type SkaterControls, type SwitchMode } from '../sim/HockeyEngine';
+import {
+  HockeyEngine,
+  type MatchPhase,
+  type MovementControls,
+  type SkaterControls,
+  type SwitchMode,
+} from '../sim/HockeyEngine';
 import { Skater, type Team } from '../sim/Skater';
 import { clamp, lerpVec, type CircleBody, type Vec2 } from '../sim/geometry';
 import { PUCK_RADIUS } from '../sim/Puck';
@@ -46,6 +52,10 @@ const SCORE_BOX_WIDTH = 150;
 const SCORE_BOX_HEIGHT = 46;
 const SCORE_BOX_GAP = 8;
 const TEAM_NAMES: Record<Team, string> = { player: 'YOU', opponent: 'OPP' };
+/** Countdown numbers sit above the center dot so the respawned puck stays visible. */
+const COUNTDOWN_Y = RINK_HEIGHT / 2 - 150;
+/** How long "GO!" shows after the countdown (ms). */
+const GO_FLASH_MS = 700;
 /** How long the puck takes to pop in when it respawns (ms). */
 const PUCK_RESPAWN_POP_MS = 300;
 /** Moving slower than this (px/s) plays the idle animation. */
@@ -96,7 +106,11 @@ export class HockeyScene extends Phaser.Scene {
   private helpText!: Phaser.GameObjects.Text;
   private scoreTexts!: Record<Team, Phaser.GameObjects.Text>;
   private goalBanner!: Phaser.GameObjects.Text;
+  /** Big 3-2-1 before play resumes after a goal, then "GO!". */
+  private countdownText!: Phaser.GameObjects.Text;
+  private lastPhase: MatchPhase = 'play';
   private lastPuckRespawns = 0;
+  private goFlashUntil = 0;
   private movementScheme: MovementScheme = MOVEMENT_SCHEMES[0];
   /** Testing toggle (C) between the two ways Space picks who to switch to. */
   private switchMode: SwitchMode = 'nextInList';
@@ -205,6 +219,18 @@ export class HockeyScene extends Phaser.Scene {
       .setOrigin(0.5, 0)
       .setDepth(HUD_DEPTH)
       .setVisible(false);
+    this.countdownText = this.add
+      .text(centerX, COUNTDOWN_Y, '', {
+        fontFamily: 'monospace',
+        fontSize: '120px',
+        fontStyle: 'bold',
+        color: '#ffffff',
+        stroke: '#0b1220',
+        strokeThickness: 10,
+      })
+      .setOrigin(0.5)
+      .setDepth(HUD_DEPTH)
+      .setVisible(false);
     this.updateScoreboard();
   }
 
@@ -218,7 +244,27 @@ export class HockeyScene extends Phaser.Scene {
       this.goalBanner.setColor(`#${TEAM_COLORS[goalScoredBy].toString(16).padStart(6, '0')}`);
     }
 
+    this.updateCountdown();
     this.animatePuckRespawn();
+  }
+
+  /** 3-2-1 while play is frozen after a goal, then a short "GO!" once it resumes. */
+  private updateCountdown(): void {
+    const { phase } = this.engine;
+
+    if (this.lastPhase === 'countdown' && phase === 'play') {
+      this.goFlashUntil = this.time.now + GO_FLASH_MS;
+    }
+
+    this.lastPhase = phase;
+
+    if (phase === 'countdown') {
+      this.countdownText.setText(String(Math.ceil(this.engine.countdownRemaining))).setVisible(true);
+    } else if (this.time.now < this.goFlashUntil) {
+      this.countdownText.setText('GO!').setVisible(true);
+    } else {
+      this.countdownText.setVisible(false);
+    }
   }
 
   /** Pops the puck in on the center dot when it respawns, so it reads as new rather than moved. */

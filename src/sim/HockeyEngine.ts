@@ -22,6 +22,8 @@ const WALK_BACK_MIN_SECONDS = 1.5;
 const WALK_BACK_MAX_SECONDS = 5;
 /** How hard skaters brake into their spots when walking back: desired speed = distance x this. */
 const WALK_BACK_ARRIVE_GAIN = 2.5;
+/** Frozen countdown before play resumes after a goal (s). */
+const COUNTDOWN_SECONDS = 3;
 /** The center faceoff dot. */
 const CENTER_ICE: Vec2 = { x: RINK_WIDTH / 2, y: RINK_HEIGHT / 2 };
 
@@ -49,8 +51,10 @@ export interface SkaterControls {
  * What the match is doing:
  * - `play`: normal hockey.
  * - `walkBack`: a goal was scored; everyone skates to their starting spot and the player has no control.
+ * - `countdown`: everyone is on their spot and the puck is back on the center dot; nobody moves
+ *   until the countdown ends.
  */
-export type MatchPhase = 'play' | 'walkBack';
+export type MatchPhase = 'play' | 'walkBack' | 'countdown';
 
 /** How Space picks the next skater to control: lineup order, or nearest the cursor. */
 export type SwitchMode = 'nextInList' | 'closestToAim';
@@ -62,7 +66,7 @@ export class HockeyEngine {
   public opponentsChasePuck = false;
   /** Goals scored by each team. */
   public readonly score: Record<Team, number> = { player: 0, opponent: 0 };
-  /** The team that just scored, from the goal until everyone is lined up again. */
+  /** The team that just scored, from the goal until the countdown starts. */
   public goalScoredBy?: Team;
   public phase: MatchPhase = 'play';
   /** Counts up each time the puck respawns on the center dot, so the view can animate it in. */
@@ -79,6 +83,11 @@ export class HockeyEngine {
       skaters.map((skater) => [skater, { position: { ...skater.position }, facing: { ...skater.facing } }]),
     );
     this.setControlledSkater(skaters[0]);
+  }
+
+  /** Seconds left before play resumes, while in the `countdown` phase. */
+  get countdownRemaining(): number {
+    return this.phase === 'countdown' ? Math.max(0, COUNTDOWN_SECONDS - this.phaseSeconds) : 0;
   }
 
   /** The skater the player's input drives: whichever has `controlledByPlayer` set. */
@@ -187,6 +196,12 @@ export class HockeyEngine {
       case 'walkBack':
         this.stepWalkBack(deltaSeconds);
         break;
+      case 'countdown':
+        // Everyone frozen on their spot.
+        if (this.phaseSeconds >= COUNTDOWN_SECONDS) {
+          this.setPhase('play');
+        }
+        break;
     }
   }
 
@@ -259,7 +274,7 @@ export class HockeyEngine {
     return Math.hypot(home.x - skater.position.x, home.y - skater.position.y) < HOME_RADIUS && skater.speed < HOME_SPEED;
   }
 
-  /** Snaps everyone exactly onto their spots, respawns the puck on the center dot, and resumes play. */
+  /** Snaps everyone exactly onto their spots, respawns the puck on the center dot, and starts the countdown. */
   private lineUpForFaceoff(): void {
     this.skaters.forEach((skater) => {
       const spot = this.startingSpots.get(skater)!;
@@ -274,7 +289,7 @@ export class HockeyEngine {
     this.resetPuck();
     this.puckRespawns += 1;
     this.goalScoredBy = undefined;
-    this.setPhase('play');
+    this.setPhase('countdown');
   }
 
   /** Counts a goal when the puck crosses into a net and sends everyone back to their spots. */

@@ -16,7 +16,13 @@ export const POKEMON_SPECIES = {
   garchomp: defineSpecies('Garchomp', { mass: 95 }),
   gible: defineSpecies('Gible', { mass: 20.5 }),
   gabite: defineSpecies('Gabite', { mass: 56 }),
+  golett: defineSpecies('Golett', { mass: 92 }),
+  golurk: defineSpecies('Golurk', { mass: 330 }),
+  druddigon: defineSpecies('Druddigon', { mass: 139 }),
   flygon: defineSpecies('Flygon', { mass: 82 }),
   trapinch: defineSpecies('Trapinch', { mass: 15 }),
   vibrava: defineSpecies('Vibrava', { mass: 15.3 }),
+  phantump: defineSpecies('Phantump', { mass: 7 }),
+  trevenant: defineSpecies('Trevenant', { mass: 71 }),
+  tauros: defineSpecies('Tauros', { mass: 88.4 }),
 } satisfies Record<string, PokemonSpecies>;

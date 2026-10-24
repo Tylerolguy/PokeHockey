@@ -57,3 +57,38 @@ export const DEFENDED_GOAL: Record<Team, Vec2> = {
 
 export const BOARD_RESTITUTION = 0.35;
 export const NET_RESTITUTION = 0.2;
+
+/** Rink markings measured from the background image (left half; the right half mirrors it). */
+const END_ZONE_DOT_X = 440;
+const NEUTRAL_ZONE_DOT_X = 648;
+const UPPER_DOT_Y = 270;
+const LOWER_DOT_Y = 669;
+/** How far the goal crease reaches out from the goal line (px). */
+export const CREASE_DEPTH = 74;
+
+/** Mirrors a left-half point onto the right half of the rink. */
+function mirror(point: Vec2): Vec2 {
+  return { x: RINK_WIDTH - point.x, y: point.y };
+}
+
+const LEFT_FACEOFF_DOTS = {
+  /** The two dots inside each end zone. */
+  endZone: [
+    { x: END_ZONE_DOT_X, y: UPPER_DOT_Y },
+    { x: END_ZONE_DOT_X, y: LOWER_DOT_Y },
+  ],
+  /** The two dots just outside each blue line, in the neutral zone. */
+  neutralZone: [
+    { x: NEUTRAL_ZONE_DOT_X, y: UPPER_DOT_Y },
+    { x: NEUTRAL_ZONE_DOT_X, y: LOWER_DOT_Y },
+  ],
+};
+
+/** Faceoff dots on each team's defending half, upper dot first. */
+export const FACEOFF_DOTS: Record<Team, { endZone: Vec2[]; neutralZone: Vec2[] }> = {
+  player: LEFT_FACEOFF_DOTS,
+  opponent: {
+    endZone: LEFT_FACEOFF_DOTS.endZone.map(mirror),
+    neutralZone: LEFT_FACEOFF_DOTS.neutralZone.map(mirror),
+  },
+};

@@ -14,7 +14,7 @@ import {
   type SkaterControls,
   type SwitchMode,
 } from '../sim/HockeyEngine';
-import { Skater, type Team } from '../sim/Skater';
+import { Skater, type PlayingPosition, type Team } from '../sim/Skater';
 import { clamp, lerpVec, type CircleBody, type Vec2 } from '../sim/geometry';
 import { PUCK_RADIUS } from '../sim/Puck';
 import {
@@ -28,17 +28,66 @@ import {
 } from '../sim/rink';
 
 /**
- * Who starts on the ice and for which team; the first is the one the player controls. Team lives
- * here rather than on the species so any species can play on either side. Teammates don't move
- * yet; opponents only move while the T testing toggle is on.
+ * Who starts on the ice, for which team, and at which playing position; the first is the one the
+ * player controls. Team and position live here rather than on the species so any species can play
+ * anywhere. Teammates don't move yet; opponents only move while the T testing toggle is on.
  */
-const LINEUP: { species: PokemonSpecies; team: Team; x: number; y: number; facingX: number }[] = [
-  { species: POKEMON_SPECIES.garchomp, team: 'player', x: RINK_WIDTH / 2 - 140, y: RINK_HEIGHT / 2, facingX: 1 },
-  { species: POKEMON_SPECIES.gible, team: 'player', x: RINK_WIDTH / 2 - 300, y: RINK_HEIGHT / 2 - 160, facingX: 1 },
-  { species: POKEMON_SPECIES.gabite, team: 'player', x: RINK_WIDTH / 2 - 300, y: RINK_HEIGHT / 2 + 160, facingX: 1 },
-  { species: POKEMON_SPECIES.flygon, team: 'opponent', x: RINK_WIDTH / 2 + 140, y: RINK_HEIGHT / 2, facingX: -1 },
-  { species: POKEMON_SPECIES.trapinch, team: 'opponent', x: RINK_WIDTH / 2 + 300, y: RINK_HEIGHT / 2 - 160, facingX: -1 },
-  { species: POKEMON_SPECIES.vibrava, team: 'opponent', x: RINK_WIDTH / 2 + 300, y: RINK_HEIGHT / 2 + 160, facingX: -1 },
+const LINEUP: {
+  species: PokemonSpecies;
+  team: Team;
+  playingPosition: PlayingPosition;
+  x: number;
+  y: number;
+  facingX: number;
+}[] = [
+  {
+    species: POKEMON_SPECIES.garchomp,
+    team: 'player',
+    playingPosition: 'offense',
+    x: RINK_WIDTH / 2 - 140,
+    y: RINK_HEIGHT / 2,
+    facingX: 1,
+  },
+  {
+    species: POKEMON_SPECIES.gible,
+    team: 'player',
+    playingPosition: 'goalie',
+    x: RINK_WIDTH / 2 - 300,
+    y: RINK_HEIGHT / 2 - 160,
+    facingX: 1,
+  },
+  {
+    species: POKEMON_SPECIES.gabite,
+    team: 'player',
+    playingPosition: 'defense',
+    x: RINK_WIDTH / 2 - 300,
+    y: RINK_HEIGHT / 2 + 160,
+    facingX: 1,
+  },
+  {
+    species: POKEMON_SPECIES.flygon,
+    team: 'opponent',
+    playingPosition: 'offense',
+    x: RINK_WIDTH / 2 + 140,
+    y: RINK_HEIGHT / 2,
+    facingX: -1,
+  },
+  {
+    species: POKEMON_SPECIES.trapinch,
+    team: 'opponent',
+    playingPosition: 'goalie',
+    x: RINK_WIDTH / 2 + 300,
+    y: RINK_HEIGHT / 2 - 160,
+    facingX: -1,
+  },
+  {
+    species: POKEMON_SPECIES.vibrava,
+    team: 'opponent',
+    playingPosition: 'defense',
+    x: RINK_WIDTH / 2 + 300,
+    y: RINK_HEIGHT / 2 + 160,
+    facingX: -1,
+  },
 ];
 const SPRITE_SCALE = 1.7;
 /** Draw order: ice markings, then skaters and puck sorted by screen y, then aim and HUD on top. */
@@ -128,8 +177,8 @@ export class HockeyScene extends Phaser.Scene {
     this.add.image(0, 0, RINK_BACKGROUND_KEY).setOrigin(0, 0);
     this.boundsDebug = this.drawBounds();
 
-    const skaters = LINEUP.map(({ species, team, x, y, facingX }) => {
-      const skater = new Skater({ x, y }, team, species.tuning);
+    const skaters = LINEUP.map(({ species, team, playingPosition, x, y, facingX }) => {
+      const skater = new Skater({ x, y }, team, playingPosition, species.tuning);
       skater.setFacing(facingX, 0);
       createPokemonAnimations(this, species.model);
       const sprite = this.add.sprite(x, y, getPokemonTextureKey(species.model)).setScale(SPRITE_SCALE);

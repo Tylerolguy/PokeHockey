@@ -74,6 +74,13 @@ export const DEFAULT_SKATER_TUNING: SkaterTuning = {
 /** Which side a skater plays for. */
 export type Team = 'player' | 'opponent';
 
+/**
+ * A Pokémon's job on its team. `bench` is for Pokémon dressed for the game but not on the ice, and
+ * `reserve` for Pokémon on the roster but not in the lineup (neither used yet). Called
+ * `playingPosition` on skaters because `position` is their spot on the ice.
+ */
+export type PlayingPosition = 'offense' | 'defense' | 'goalie' | 'bench' | 'reserve';
+
 /** Plain simulation state for one skater: no Phaser types, so it can run headless. */
 export class Skater implements CircleBody {
   public readonly position: Vec2;
@@ -97,6 +104,7 @@ export class Skater implements CircleBody {
   constructor(
     start: Vec2,
     public readonly team: Team,
+    public readonly playingPosition: PlayingPosition,
     public readonly tuning: SkaterTuning = DEFAULT_SKATER_TUNING,
   ) {
     this.position = { ...start };

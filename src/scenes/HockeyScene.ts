@@ -40,6 +40,12 @@ const RING_DEPTH = 1;
 const ON_ICE_BASE_DEPTH = 100;
 const AIM_DEPTH = 2000;
 const HUD_DEPTH = 2001;
+/** Scoreboard at the top center: one colored box per team. */
+const SCOREBOARD_Y = 14;
+const SCORE_BOX_WIDTH = 150;
+const SCORE_BOX_HEIGHT = 46;
+const SCORE_BOX_GAP = 8;
+const TEAM_NAMES: Record<Team, string> = { player: 'YOU', opponent: 'OPP' };
 /** Moving slower than this (px/s) plays the idle animation. */
 const WALK_ANIMATION_MIN_SPEED = 25;
 const AIM_LINE_LENGTH = 70;
@@ -86,6 +92,8 @@ export class HockeyScene extends Phaser.Scene {
   private moveKeys!: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
   private boundsDebug!: Phaser.GameObjects.Graphics;
   private helpText!: Phaser.GameObjects.Text;
+  private scoreTexts!: Record<Team, Phaser.GameObjects.Text>;
+  private goalBanner!: Phaser.GameObjects.Text;
   private movementScheme: MovementScheme = MOVEMENT_SCHEMES[0];
   /** Testing toggle (C) between the two ways Space picks who to switch to. */
   private switchMode: SwitchMode = 'nextInList';
@@ -155,6 +163,57 @@ export class HockeyScene extends Phaser.Scene {
       .setOrigin(0, 1)
       .setDepth(HUD_DEPTH);
     this.updateHelpText();
+    this.createScoreboard();
+  }
+
+  private createScoreboard(): void {
+    const centerX = RINK_WIDTH / 2;
+    const boxes = this.add.graphics().setDepth(HUD_DEPTH);
+    const makeBox = (team: Team, left: number): Phaser.GameObjects.Text => {
+      boxes.fillStyle(0x0b1220, 0.85);
+      boxes.fillRoundedRect(left - 3, SCOREBOARD_Y - 3, SCORE_BOX_WIDTH + 6, SCORE_BOX_HEIGHT + 6, 10);
+      boxes.fillStyle(TEAM_COLORS[team], 0.95);
+      boxes.fillRoundedRect(left, SCOREBOARD_Y, SCORE_BOX_WIDTH, SCORE_BOX_HEIGHT, 8);
+
+      return this.add
+        .text(left + SCORE_BOX_WIDTH / 2, SCOREBOARD_Y + SCORE_BOX_HEIGHT / 2, '', {
+          fontFamily: 'monospace',
+          fontSize: '26px',
+          fontStyle: 'bold',
+          color: '#ffffff',
+        })
+        .setOrigin(0.5)
+        .setDepth(HUD_DEPTH);
+    };
+
+    this.scoreTexts = {
+      player: makeBox('player', centerX - SCORE_BOX_GAP / 2 - SCORE_BOX_WIDTH),
+      opponent: makeBox('opponent', centerX + SCORE_BOX_GAP / 2),
+    };
+    this.goalBanner = this.add
+      .text(centerX, SCOREBOARD_Y + SCORE_BOX_HEIGHT + 14, 'GOAL!', {
+        fontFamily: 'monospace',
+        fontSize: '40px',
+        fontStyle: 'bold',
+        color: '#ffffff',
+        stroke: '#0b1220',
+        strokeThickness: 6,
+      })
+      .setOrigin(0.5, 0)
+      .setDepth(HUD_DEPTH)
+      .setVisible(false);
+    this.updateScoreboard();
+  }
+
+  private updateScoreboard(): void {
+    const { score, goalScoredBy } = this.engine;
+    this.scoreTexts.player.setText(`${TEAM_NAMES.player}  ${score.player}`);
+    this.scoreTexts.opponent.setText(`${score.opponent}  ${TEAM_NAMES.opponent}`);
+    this.goalBanner.setVisible(goalScoredBy !== undefined);
+
+    if (goalScoredBy) {
+      this.goalBanner.setColor(`#${TEAM_COLORS[goalScoredBy].toString(16).padStart(6, '0')}`);
+    }
   }
 
   private updateHelpText(): void {
@@ -193,6 +252,7 @@ export class HockeyScene extends Phaser.Scene {
     this.engine.update(controls, deltaMs / 1000);
     this.drawAim(controls.aim);
     this.syncSprites();
+    this.updateScoreboard();
   }
 
   private syncSprites(): void {

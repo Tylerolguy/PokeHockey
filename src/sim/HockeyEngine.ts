@@ -224,7 +224,10 @@ export class HockeyEngine {
     this.checkForGoal();
   }
 
-  /** Everyone skates back to their starting spot while the dead puck sits in the net. */
+  /**
+   * Everyone skates back to their starting spot while the dead puck sits in the net. Skaters pass
+   * through each other on the way so nobody gets held up; solid collisions return at the countdown.
+   */
   private stepWalkBack(deltaSeconds: number): void {
     this.skaters.forEach((skater) => {
       const spot = this.getFaceoffSpot(skater);
@@ -232,7 +235,6 @@ export class HockeyEngine {
       const { direction } = this.steer(skater, move, aim, deltaSeconds);
       skater.update(direction, deltaSeconds);
     });
-    this.resolveSkaterCollisions();
     this.puck.update(deltaSeconds);
 
     const allHome = this.skaters.every((skater) => this.isHome(skater));

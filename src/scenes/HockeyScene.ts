@@ -97,6 +97,21 @@ const TEAM_COLORS: Record<Team, number> = {
   opponent: 0xff3d4f,
 };
 
+/**
+ * The camera is zoomed in so only part of the rink is on screen, and follows the controlled
+ * skater. The HUD lives on a second, fixed camera so it doesn't zoom or scroll.
+ */
+const CAMERA_ZOOM = 1.6;
+/** How quickly the camera catches up with the controlled skater (0..1 per frame). */
+const CAMERA_FOLLOW_LERP = 0.12;
+/**
+ * Off-screen puck marker: a badge with a puck icon and an arrowhead pointing at the puck. How far
+ * in from the screen edge it sits, the badge radius, and how far the arrow sticks out (px).
+ */
+const PUCK_INDICATOR_INSET = 48;
+const PUCK_INDICATOR_RADIUS = 22;
+const PUCK_INDICATOR_ARROW_LENGTH = 16;
+
 type MovementScheme = MovementControls['scheme'];
 const SWITCH_MODE_LABELS: Record<SwitchMode, string> = {
   nextInList: 'next in list',
@@ -132,6 +147,12 @@ export class HockeyScene extends Phaser.Scene {
   private movementScheme: MovementScheme = MOVEMENT_SCHEMES[0];
   /** Testing toggle (C) between the two ways Space picks who to switch to. */
   private switchMode: SwitchMode = 'nextInList';
+  /** Objects drawn on the fixed HUD camera instead of the zoomed, following rink camera. */
+  private readonly hudObjects = new Set<Phaser.GameObjects.GameObject>();
+  /** Arrow at the screen edge pointing to the puck when it's off screen. */
+  private puckIndicator!: Phaser.GameObjects.Graphics;
+  /** The sprite the rink camera is currently following. */
+  private followedSprite?: Phaser.GameObjects.Sprite;
 
   constructor() {
     super('HockeyScene');
@@ -169,8 +190,7 @@ export class HockeyScene extends Phaser.Scene {
     keyboard.on('keydown-R', () => this.engine.resetPuck());
     keyboard.addCapture('SPACE');
     keyboard.on('keydown-SPACE', () => {
-      const pointer = this.input.activePointer;
-      this.engine.switchControlledSkater(this.switchMode, { x: pointer.worldX, y: pointer.worldY });
+      this.engine.switchControlledSkater(this.switchMode, this.getPointerWorldPosition());
     });
     keyboard.on('keydown-C', () => {
       this.switchMode = this.switchMode === 'nextInList' ? 'closestToAim' : 'nextInList';
@@ -187,68 +207,170 @@ export class HockeyScene extends Phaser.Scene {
       this.updateHelpText();
     });
 
-    this.helpText = this.add
-      .text(16, RINK_HEIGHT - 16, '', {
-        fontFamily: 'monospace',
-        fontSize: '15px',
-        color: '#ffffff',
-        backgroundColor: '#00000088',
-        padding: { x: 8, y: 4 },
-      })
-      .setOrigin(0, 1)
-      .setDepth(HUD_DEPTH);
+    this.helpText = this.addToHud(
+      this.add
+        .text(16, RINK_HEIGHT - 16, '', {
+          fontFamily: 'monospace',
+          fontSize: '15px',
+          color: '#ffffff',
+          backgroundColor: '#00000088',
+          padding: { x: 8, y: 4 },
+        })
+        .setOrigin(0, 1)
+        .setDepth(HUD_DEPTH),
+    );
     this.updateHelpText();
     this.createScoreboard();
+    this.puckIndicator = this.addToHud(this.add.graphics().setDepth(HUD_DEPTH));
+    this.setUpCameras();
+  }
+
+  /** Marks `object` as part of the HUD: drawn by the fixed HUD camera, not the rink camera. */
+  private addToHud<T extends Phaser.GameObjects.GameObject>(object: T): T {
+    this.hudObjects.add(object);
+
+    return object;
+  }
+
+  /**
+   * The main camera zooms into the rink and follows the controlled skater; a second camera with no
+   * zoom or scroll draws only the HUD on top. Each camera ignores the other's objects.
+   */
+  private setUpCameras(): void {
+    const rinkCamera = this.cameras.main.setBounds(0, 0, RINK_WIDTH, RINK_HEIGHT).setZoom(CAMERA_ZOOM);
+    const hudCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height);
+
+    rinkCamera.ignore([...this.hudObjects]);
+    hudCamera.ignore(this.children.list.filter((object) => !this.hudObjects.has(object)));
+    this.followControlledSkater(true);
+  }
+
+  /** Points the rink camera at the controlled skater, re-targeting when control switches. */
+  private followControlledSkater(snap = false): void {
+    const sprite = this.skaterSprites.get(this.engine.controlledSkater)?.sprite;
+
+    if (!sprite || sprite === this.followedSprite) {
+      return;
+    }
+
+    this.followedSprite = sprite;
+    this.cameras.main.startFollow(sprite, true, CAMERA_FOLLOW_LERP, CAMERA_FOLLOW_LERP);
+
+    if (snap) {
+      this.cameras.main.centerOn(sprite.x, sprite.y);
+    }
+  }
+
+  /** Where the mouse is on the rink, through the zoomed, scrolling camera (fresh every frame). */
+  private getPointerWorldPosition(): Vec2 {
+    const pointer = this.input.activePointer;
+    const point = this.cameras.main.getWorldPoint(pointer.x, pointer.y);
+
+    return { x: point.x, y: point.y };
+  }
+
+  /**
+   * When the puck is off screen, draws an arrow on the HUD at the screen edge pointing toward it,
+   * with a puck icon so it reads as "puck this way".
+   */
+  private updatePuckIndicator(): void {
+    const graphics = this.puckIndicator;
+    graphics.clear();
+
+    const camera = this.cameras.main;
+    const puck = this.getDrawPosition(this.engine.puck);
+
+    if (camera.worldView.contains(puck.x, puck.y)) {
+      return;
+    }
+
+    const { width, height } = this.scale;
+    const screenX = (puck.x - camera.worldView.x) * camera.zoom;
+    const screenY = (puck.y - camera.worldView.y) * camera.zoom;
+    const dx = screenX - width / 2;
+    const dy = screenY - height / 2;
+    // Slide along the line from screen center toward the puck until it meets the inset border.
+    const reach = Math.min(
+      dx !== 0 ? (width / 2 - PUCK_INDICATOR_INSET) / Math.abs(dx) : Infinity,
+      dy !== 0 ? (height / 2 - PUCK_INDICATOR_INSET) / Math.abs(dy) : Infinity,
+    );
+    const x = width / 2 + dx * reach;
+    const y = height / 2 + dy * reach;
+    const angle = Math.atan2(dy, dx);
+    const along = (distance: number, sideways = 0) => ({
+      x: x + Math.cos(angle) * distance - Math.sin(angle) * sideways,
+      y: y + Math.sin(angle) * distance + Math.cos(angle) * sideways,
+    });
+    const tip = along(PUCK_INDICATOR_RADIUS + PUCK_INDICATOR_ARROW_LENGTH);
+    const baseLeft = along(PUCK_INDICATOR_RADIUS - 4, -PUCK_INDICATOR_RADIUS * 0.6);
+    const baseRight = along(PUCK_INDICATOR_RADIUS - 4, PUCK_INDICATOR_RADIUS * 0.6);
+
+    graphics.fillStyle(0xffffff, 0.95);
+    graphics.fillTriangle(tip.x, tip.y, baseLeft.x, baseLeft.y, baseRight.x, baseRight.y);
+    graphics.fillStyle(0x0b1220, 0.85);
+    graphics.fillCircle(x, y, PUCK_INDICATOR_RADIUS);
+    graphics.lineStyle(3, 0xffffff, 0.95);
+    graphics.strokeCircle(x, y, PUCK_INDICATOR_RADIUS);
+    graphics.fillStyle(0x15171c, 1);
+    graphics.fillCircle(x, y, PUCK_RADIUS * 1.6);
+    graphics.lineStyle(2, 0x5a6070, 1);
+    graphics.strokeCircle(x, y, PUCK_RADIUS * 1.6 - 2);
   }
 
   private createScoreboard(): void {
     const centerX = RINK_WIDTH / 2;
-    const boxes = this.add.graphics().setDepth(HUD_DEPTH);
+    const boxes = this.addToHud(this.add.graphics().setDepth(HUD_DEPTH));
     const makeBox = (team: Team, left: number): Phaser.GameObjects.Text => {
       boxes.fillStyle(0x0b1220, 0.85);
       boxes.fillRoundedRect(left - 3, SCOREBOARD_Y - 3, SCORE_BOX_WIDTH + 6, SCORE_BOX_HEIGHT + 6, 10);
       boxes.fillStyle(TEAM_COLORS[team], 0.95);
       boxes.fillRoundedRect(left, SCOREBOARD_Y, SCORE_BOX_WIDTH, SCORE_BOX_HEIGHT, 8);
 
-      return this.add
-        .text(left + SCORE_BOX_WIDTH / 2, SCOREBOARD_Y + SCORE_BOX_HEIGHT / 2, '', {
-          fontFamily: 'monospace',
-          fontSize: '26px',
-          fontStyle: 'bold',
-          color: '#ffffff',
-        })
-        .setOrigin(0.5)
-        .setDepth(HUD_DEPTH);
+      return this.addToHud(
+        this.add
+          .text(left + SCORE_BOX_WIDTH / 2, SCOREBOARD_Y + SCORE_BOX_HEIGHT / 2, '', {
+            fontFamily: 'monospace',
+            fontSize: '26px',
+            fontStyle: 'bold',
+            color: '#ffffff',
+          })
+          .setOrigin(0.5)
+          .setDepth(HUD_DEPTH),
+      );
     };
 
     this.scoreTexts = {
       player: makeBox('player', centerX - SCORE_BOX_GAP / 2 - SCORE_BOX_WIDTH),
       opponent: makeBox('opponent', centerX + SCORE_BOX_GAP / 2),
     };
-    this.goalBanner = this.add
-      .text(centerX, SCOREBOARD_Y + SCORE_BOX_HEIGHT + 14, 'GOAL!', {
-        fontFamily: 'monospace',
-        fontSize: '40px',
-        fontStyle: 'bold',
-        color: '#ffffff',
-        stroke: '#0b1220',
-        strokeThickness: 6,
-      })
-      .setOrigin(0.5, 0)
-      .setDepth(HUD_DEPTH)
-      .setVisible(false);
-    this.countdownText = this.add
-      .text(centerX, COUNTDOWN_Y, '', {
-        fontFamily: 'monospace',
-        fontSize: '120px',
-        fontStyle: 'bold',
-        color: '#ffffff',
-        stroke: '#0b1220',
-        strokeThickness: 10,
-      })
-      .setOrigin(0.5)
-      .setDepth(HUD_DEPTH)
-      .setVisible(false);
+    this.goalBanner = this.addToHud(
+      this.add
+        .text(centerX, SCOREBOARD_Y + SCORE_BOX_HEIGHT + 14, 'GOAL!', {
+          fontFamily: 'monospace',
+          fontSize: '40px',
+          fontStyle: 'bold',
+          color: '#ffffff',
+          stroke: '#0b1220',
+          strokeThickness: 6,
+        })
+        .setOrigin(0.5, 0)
+        .setDepth(HUD_DEPTH)
+        .setVisible(false),
+    );
+    this.countdownText = this.addToHud(
+      this.add
+        .text(centerX, COUNTDOWN_Y, '', {
+          fontFamily: 'monospace',
+          fontSize: '120px',
+          fontStyle: 'bold',
+          color: '#ffffff',
+          stroke: '#0b1220',
+          strokeThickness: 10,
+        })
+        .setOrigin(0.5)
+        .setDepth(HUD_DEPTH)
+        .setVisible(false),
+    );
     this.updateScoreboard();
   }
 
@@ -325,7 +447,7 @@ export class HockeyScene extends Phaser.Scene {
     const pointer = this.input.activePointer;
     const controls: SkaterControls = {
       move: this.readMovement(),
-      aim: { x: pointer.worldX, y: pointer.worldY },
+      aim: this.getPointerWorldPosition(),
       shoot: pointer.leftButtonDown(),
       pass: pointer.rightButtonDown(),
     };
@@ -333,6 +455,8 @@ export class HockeyScene extends Phaser.Scene {
     this.engine.update(controls, deltaMs / 1000);
     this.drawAim(controls.aim);
     this.syncSprites();
+    this.followControlledSkater();
+    this.updatePuckIndicator();
     this.updateScoreboard();
   }
 

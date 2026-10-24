@@ -46,6 +46,8 @@ const SCORE_BOX_WIDTH = 150;
 const SCORE_BOX_HEIGHT = 46;
 const SCORE_BOX_GAP = 8;
 const TEAM_NAMES: Record<Team, string> = { player: 'YOU', opponent: 'OPP' };
+/** How long the puck takes to pop in when it respawns (ms). */
+const PUCK_RESPAWN_POP_MS = 300;
 /** Moving slower than this (px/s) plays the idle animation. */
 const WALK_ANIMATION_MIN_SPEED = 25;
 const AIM_LINE_LENGTH = 70;
@@ -94,6 +96,7 @@ export class HockeyScene extends Phaser.Scene {
   private helpText!: Phaser.GameObjects.Text;
   private scoreTexts!: Record<Team, Phaser.GameObjects.Text>;
   private goalBanner!: Phaser.GameObjects.Text;
+  private lastPuckRespawns = 0;
   private movementScheme: MovementScheme = MOVEMENT_SCHEMES[0];
   /** Testing toggle (C) between the two ways Space picks who to switch to. */
   private switchMode: SwitchMode = 'nextInList';
@@ -214,6 +217,20 @@ export class HockeyScene extends Phaser.Scene {
     if (goalScoredBy) {
       this.goalBanner.setColor(`#${TEAM_COLORS[goalScoredBy].toString(16).padStart(6, '0')}`);
     }
+
+    this.animatePuckRespawn();
+  }
+
+  /** Pops the puck in on the center dot when it respawns, so it reads as new rather than moved. */
+  private animatePuckRespawn(): void {
+    if (this.engine.puckRespawns === this.lastPuckRespawns) {
+      return;
+    }
+
+    this.lastPuckRespawns = this.engine.puckRespawns;
+    this.tweens.killTweensOf(this.puckSprite);
+    this.puckSprite.setScale(0);
+    this.tweens.add({ targets: this.puckSprite, scale: 1, duration: PUCK_RESPAWN_POP_MS, ease: 'Back.Out' });
   }
 
   private updateHelpText(): void {

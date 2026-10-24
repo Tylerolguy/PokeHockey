@@ -13,8 +13,15 @@ const MAX_FRAME_SECONDS = 0.1;
 const PASS_FULL_SPEED_DISTANCE = 700;
 /** How bouncy skater-on-skater hits are. */
 const SKATER_RESTITUTION = 0.3;
-/** How long the puck stays in the net after a goal before going back to center ice (s). */
-const GOAL_RESET_SECONDS = 1;
+/** After a goal, how close to their starting spot (px) and how slow (px/s) a skater must be to count as home. */
+const HOME_RADIUS = 6;
+const HOME_SPEED = 20;
+/** After a goal, the shortest time before the line-up, so the goal (puck in the net, GOAL! banner) always registers (s). */
+const WALK_BACK_MIN_SECONDS = 1.5;
+/** After a goal, skaters still not home after this long are placed on their spots (s). */
+const WALK_BACK_MAX_SECONDS = 5;
+/** How hard skaters brake into their spots when walking back: desired speed = distance x this. */
+const WALK_BACK_ARRIVE_GAIN = 2.5;
 /** The center faceoff dot. */
 const CENTER_ICE: Vec2 = { x: RINK_WIDTH / 2, y: RINK_HEIGHT / 2 };
 
@@ -38,6 +45,13 @@ export interface SkaterControls {
   pass: boolean;
 }
 
+/**
+ * What the match is doing:
+ * - `play`: normal hockey.
+ * - `walkBack`: a goal was scored; everyone skates to their starting spot and the player has no control.
+ */
+export type MatchPhase = 'play' | 'walkBack';
+
 /** How Space picks the next skater to control: lineup order, or nearest the cursor. */
 export type SwitchMode = 'nextInList' | 'closestToAim';
 
@@ -48,14 +62,22 @@ export class HockeyEngine {
   public opponentsChasePuck = false;
   /** Goals scored by each team. */
   public readonly score: Record<Team, number> = { player: 0, opponent: 0 };
-  /** The team that just scored, while the puck sits in the net before going back to center ice. */
+  /** The team that just scored, from the goal until everyone is lined up again. */
   public goalScoredBy?: Team;
-  private goalResetSeconds = 0;
+  public phase: MatchPhase = 'play';
+  /** Counts up each time the puck respawns on the center dot, so the view can animate it in. */
+  public puckRespawns = 0;
+  private phaseSeconds = 0;
   private accumulatedSeconds = 0;
   private wasPassHeld = false;
+  /** Where and which way each skater starts; they return here after every goal. */
+  private readonly startingSpots: Map<Skater, { position: Vec2; facing: Vec2 }>;
 
-  /** `skaters` is everyone on the ice; the first starts as the player's. */
+  /** `skaters` is everyone on the ice, placed and facing where they start; the first starts as the player's. */
   constructor(public readonly skaters: Skater[]) {
+    this.startingSpots = new Map(
+      skaters.map((skater) => [skater, { position: { ...skater.position }, facing: { ...skater.facing } }]),
+    );
     this.setControlledSkater(skaters[0]);
   }
 
@@ -73,12 +95,13 @@ export class HockeyEngine {
 
   /**
    * Switches the player to another skater on their team, unless the one they control has the
-   * puck. `aim` is the cursor, used by 'closestToAim'. Returns whether control changed.
+   * puck or play is stopped after a goal. `aim` is the cursor, used by 'closestToAim'. Returns
+   * whether control changed.
    */
   switchControlledSkater(mode: SwitchMode, aim: Vec2): boolean {
     const current = this.controlledSkater;
 
-    if (this.puck.carrier === current) {
+    if (this.phase !== 'play' || this.puck.carrier === current) {
       return false;
     }
 
@@ -112,10 +135,8 @@ export class HockeyEngine {
     }
   }
 
-  /** Drops the puck, loose and still, back on the center dot (ending any goal celebration). */
+  /** Drops the puck, loose and still, back on the center dot. */
   resetPuck(): void {
-    this.goalScoredBy = undefined;
-
     if (this.puck.carrier) {
       this.puck.carrier.shotCharge = undefined;
     }
@@ -157,6 +178,24 @@ export class HockeyEngine {
       body.previousPosition.y = body.position.y;
     }
 
+    this.phaseSeconds += deltaSeconds;
+
+    switch (this.phase) {
+      case 'play':
+        this.stepPlay(controls, deltaSeconds);
+        break;
+      case 'walkBack':
+        this.stepWalkBack(deltaSeconds);
+        break;
+    }
+  }
+
+  private setPhase(phase: MatchPhase): void {
+    this.phase = phase;
+    this.phaseSeconds = 0;
+  }
+
+  private stepPlay(controls: SkaterControls, deltaSeconds: number): void {
     this.handleStickControls(this.controlledSkater, controls, deltaSeconds);
     this.skaters.forEach((skater) => {
       const { move, aim } = this.getControls(skater, controls);
@@ -164,29 +203,82 @@ export class HockeyEngine {
       skater.update(direction, deltaSeconds, moveScale);
     });
     this.resolveSkaterCollisions();
-
-    // After a goal the puck is dead: nobody can touch it until it's back at center ice.
-    if (!this.goalScoredBy) {
-      this.updatePossession();
-    }
-
+    this.updatePossession();
     this.puck.update(deltaSeconds);
-    this.updateScoring(deltaSeconds);
+    this.checkForGoal();
   }
 
-  /** Counts a goal when the puck crosses into a net, then puts the puck back on the center dot. */
-  private updateScoring(deltaSeconds: number): void {
-    if (this.goalScoredBy) {
-      this.goalResetSeconds -= deltaSeconds;
+  /** Everyone skates back to their starting spot while the dead puck sits in the net. */
+  private stepWalkBack(deltaSeconds: number): void {
+    this.skaters.forEach((skater) => {
+      const spot = this.startingSpots.get(skater)!;
+      const { move, aim } = this.walkBackControls(skater, spot.position, spot.facing);
+      const { direction } = this.steer(skater, move, aim, deltaSeconds);
+      skater.update(direction, deltaSeconds);
+    });
+    this.resolveSkaterCollisions();
+    this.puck.update(deltaSeconds);
 
-      if (this.goalResetSeconds <= 0) {
-        this.goalScoredBy = undefined;
-        this.resetPuck();
-      }
+    const allHome = this.skaters.every((skater) => this.isHome(skater));
 
-      return;
+    if ((allHome && this.phaseSeconds >= WALK_BACK_MIN_SECONDS) || this.phaseSeconds >= WALK_BACK_MAX_SECONDS) {
+      this.lineUpForFaceoff();
     }
+  }
 
+  /**
+   * Skate to `home` and stop there: steers by the gap between the velocity it wants and the one it
+   * has, so it slows on arrival despite the ice. Faces where it's going, then its starting direction.
+   */
+  private walkBackControls(skater: Skater, home: Vec2, homeFacing: Vec2): SkaterControls {
+    const dx = home.x - skater.position.x;
+    const dy = home.y - skater.position.y;
+    const distance = Math.hypot(dx, dy);
+    const desiredSpeed = Math.min(skater.tuning.maxSpeed, distance * WALK_BACK_ARRIVE_GAIN);
+    const steer =
+      distance > 0
+        ? { x: (dx / distance) * desiredSpeed - skater.velocity.x, y: (dy / distance) * desiredSpeed - skater.velocity.y }
+        : { x: -skater.velocity.x, y: -skater.velocity.y };
+    const nearlyHome = distance < HOME_RADIUS * 4;
+    const aim = nearlyHome
+      ? { x: skater.position.x + homeFacing.x * 100, y: skater.position.y + homeFacing.y * 100 }
+      : { ...home };
+    const settled = Math.hypot(steer.x, steer.y) < HOME_SPEED / 2;
+
+    return {
+      move: { scheme: 'mouseFacing', direction: settled ? { x: 0, y: 0 } : steer },
+      aim,
+      shoot: false,
+      pass: false,
+    };
+  }
+
+  private isHome(skater: Skater): boolean {
+    const home = this.startingSpots.get(skater)!.position;
+
+    return Math.hypot(home.x - skater.position.x, home.y - skater.position.y) < HOME_RADIUS && skater.speed < HOME_SPEED;
+  }
+
+  /** Snaps everyone exactly onto their spots, respawns the puck on the center dot, and resumes play. */
+  private lineUpForFaceoff(): void {
+    this.skaters.forEach((skater) => {
+      const spot = this.startingSpots.get(skater)!;
+      skater.position.x = spot.position.x;
+      skater.position.y = spot.position.y;
+      skater.velocity.x = 0;
+      skater.velocity.y = 0;
+      skater.setFacing(spot.facing.x, spot.facing.y);
+      skater.shotCharge = undefined;
+    });
+    this.setControlledSkater(this.skaters[0]);
+    this.resetPuck();
+    this.puckRespawns += 1;
+    this.goalScoredBy = undefined;
+    this.setPhase('play');
+  }
+
+  /** Counts a goal when the puck crosses into a net and sends everyone back to their spots. */
+  private checkForGoal(): void {
     const scorer = getScoringTeam(this.puck);
 
     if (!scorer) {
@@ -195,13 +287,16 @@ export class HockeyEngine {
 
     this.score[scorer] += 1;
     this.goalScoredBy = scorer;
-    this.goalResetSeconds = GOAL_RESET_SECONDS;
+    this.skaters.forEach((skater) => {
+      skater.shotCharge = undefined;
+    });
 
-    // Carried in: the puck stays in the net and the carrier skates on without it.
+    // Carried in: the puck stays in the net and the carrier skates off without it.
     if (this.puck.carrier) {
-      this.puck.carrier.shotCharge = undefined;
       this.puck.release({ x: 0, y: 0 });
     }
+
+    this.setPhase('walkBack');
   }
 
   /** The player's controls for the controlled skater; AI or idle controls for everyone else. */

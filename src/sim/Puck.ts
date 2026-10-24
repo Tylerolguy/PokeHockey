@@ -17,6 +17,11 @@ const PUCK_NET_RESTITUTION = 0.4;
 const CARRY_GAP = 3;
 /** After letting go, the same skater can't instantly re-grab the puck (so shots leave the stick). */
 const REGRAB_COOLDOWN_SECONDS = 0.3;
+/** A shot stops being live (and plays like any loose puck) once it slows below this (px/s). */
+const LIVE_SHOT_MIN_SPEED = 300;
+
+/** How a puck left the stick: shots can pass through or deflect off Pokémon, passes can't. */
+export type LaunchKind = 'shot' | 'pass';
 
 export class Puck implements CircleBody {
   public readonly position: Vec2;
@@ -29,6 +34,10 @@ export class Puck implements CircleBody {
   private carryAngle = 0;
   private lastCarrier?: Skater;
   private regrabCooldown = 0;
+  /** True from a shot until it bounces off anything, someone takes the puck, or it slows down. */
+  private liveShot = false;
+  /** Skaters a live shot is touching that already had their outcome rolled for this contact. */
+  private readonly shotContacts = new Set<Skater>();
 
   constructor(start: Vec2) {
     this.position = { ...start };
@@ -41,6 +50,36 @@ export class Puck implements CircleBody {
 
   get carrier(): Skater | undefined {
     return this.carrierSkater;
+  }
+
+  /** A shot still flying fast enough to pass through or deflect off Pokémon. */
+  get isLiveShot(): boolean {
+    return this.liveShot;
+  }
+
+  /** Whether `skater`'s current contact with this live shot has already been decided. */
+  hasShotContact(skater: Skater): boolean {
+    return this.shotContacts.has(skater);
+  }
+
+  /** Records that `skater`'s current contact has been decided, so it's rolled only once. */
+  addShotContact(skater: Skater): void {
+    this.shotContacts.add(skater);
+  }
+
+  /** `skater` is no longer touching the puck; a later touch is a new contact. */
+  endShotContact(skater: Skater): void {
+    this.shotContacts.delete(skater);
+  }
+
+  /**
+   * The puck just bounced off `skater`: it's no longer a live shot, and `skater` can't grab it
+   * during the regrab cooldown, so the bounce isn't turned straight into a pickup.
+   */
+  deflectedOff(skater: Skater): void {
+    this.endLiveShot();
+    this.lastCarrier = skater;
+    this.regrabCooldown = REGRAB_COOLDOWN_SECONDS;
   }
 
   /**
@@ -71,12 +110,14 @@ export class Puck implements CircleBody {
     }
 
     this.carrierSkater = skater;
+    this.endLiveShot();
     // Start from where the puck touched, so it visibly swings around to the front.
     this.carryAngle = Math.atan2(this.position.y - skater.position.y, this.position.x - skater.position.x);
   }
 
   /** Puts the puck, loose and still, at `position`; anyone may pick it up straight away. */
   resetTo(position: Vec2): void {
+    this.endLiveShot();
     this.carrierSkater = undefined;
     this.lastCarrier = undefined;
     this.regrabCooldown = 0;
@@ -99,10 +140,14 @@ export class Puck implements CircleBody {
     this.limitSpeed();
   }
 
-  /** Releases the puck from where it sits on the stick toward `direction` (a unit vector) at `speed`. */
-  shoot(direction: Vec2, speed: number): void {
+  /**
+   * Releases the puck from where it sits on the stick toward `direction` (a unit vector) at
+   * `speed`, as a shot or a pass.
+   */
+  launch(direction: Vec2, speed: number, kind: LaunchKind): void {
     if (this.carrierSkater) {
       this.release({ x: direction.x * speed, y: direction.y * speed });
+      this.liveShot = kind === 'shot';
     }
   }
 
@@ -117,12 +162,24 @@ export class Puck implements CircleBody {
     this.applyFriction(PUCK_FRICTION * deltaSeconds);
     this.position.x += this.velocity.x * deltaSeconds;
     this.position.y += this.velocity.y * deltaSeconds;
-    this.collideWithRink();
+    const bounced = this.collideWithRink();
+
+    if (this.liveShot && (bounced || this.speed < LIVE_SHOT_MIN_SPEED)) {
+      this.endLiveShot();
+    }
   }
 
-  collideWithRink(): void {
-    containInRoundedRect(this, RINK_ICE, PUCK_BOARD_RESTITUTION);
-    RINK_NET_WALLS.forEach((wall) => pushOutOfRect(this, wall, PUCK_NET_RESTITUTION));
+  private endLiveShot(): void {
+    this.liveShot = false;
+    this.shotContacts.clear();
+  }
+
+  /** Keeps the puck inside the boards and out of the net frames. Returns true if it hit any of them. */
+  collideWithRink(): boolean {
+    const hitBoards = containInRoundedRect(this, RINK_ICE, PUCK_BOARD_RESTITUTION);
+    const hitNet = RINK_NET_WALLS.map((wall) => pushOutOfRect(this, wall, PUCK_NET_RESTITUTION)).some(Boolean);
+
+    return hitBoards || hitNet;
   }
 
   limitSpeed(): void {

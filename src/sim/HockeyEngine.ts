@@ -2,7 +2,9 @@ import { clamp, clampDirectionToArcs, resolveCircleCollision, wrapAngle, type Ve
 import { chasePuckControls, idleControls } from './PlayerAI';
 import { Puck } from './Puck';
 import { getStartingSpot, OPENING_FACEOFF_TEAM, type StartingSpot } from './formation';
+import { createRandom } from './random';
 import { getScoringTeam } from './scoring';
+import { getShotContactChances, rollShotContact } from './shotContact';
 import { Skater, type Team } from './Skater';
 import { RINK_HEIGHT, RINK_WIDTH } from './rink';
 
@@ -12,6 +14,8 @@ const STEP_SECONDS = 1 / 120;
 const MAX_FRAME_SECONDS = 0.1;
 /** Cursor distance (px) at which a pass reaches full speed. */
 const PASS_FULL_SPEED_DISTANCE = 700;
+/** How much of its speed (into the Pokémon) a shot keeps when it deflects off one. */
+const SHOT_DEFLECT_RESTITUTION = 0.6;
 /** How bouncy skater-on-skater hits are. */
 const SKATER_RESTITUTION = 0.3;
 /** After a goal, how close to their starting spot (px) and how slow (px/s) a skater must be to count as home. */
@@ -81,8 +85,18 @@ export class HockeyEngine {
    */
   public faceoffTeam: Team = OPENING_FACEOFF_TEAM;
 
-  /** `skaters` is everyone on the ice, placed for the opening faceoff; the first starts as the player's. */
-  constructor(public readonly skaters: Skater[]) {
+  /** Seeded so a match with the same inputs plays out the same way (replays, multiplayer sync). */
+  private readonly random: () => number;
+
+  /**
+   * `skaters` is everyone on the ice, placed for the opening faceoff; the first starts as the
+   * player's. `seed` drives every random roll (e.g. what a shot does when it hits a Pokémon).
+   */
+  constructor(
+    public readonly skaters: Skater[],
+    seed = 1,
+  ) {
+    this.random = createRandom(seed);
     this.setControlledSkater(skaters[0]);
   }
 
@@ -416,7 +430,7 @@ export class HockeyEngine {
     const { shotMinSpeed, shotMaxSpeed, shotChargeSeconds } = skater.tuning;
     const power = clamp((skater.shotCharge ?? 0) / shotChargeSeconds, 0, 1);
     skater.shotCharge = undefined;
-    this.puck.shoot(direction, shotMinSpeed + (shotMaxSpeed - shotMinSpeed) * power);
+    this.puck.launch(direction, shotMinSpeed + (shotMaxSpeed - shotMinSpeed) * power, 'shot');
   }
 
   /** Short passes are soft, long ones firm, so they stay catchable. */
@@ -424,7 +438,7 @@ export class HockeyEngine {
     const { passMinSpeed, passMaxSpeed } = skater.tuning;
     const distance = Math.hypot(target.x - this.puck.position.x, target.y - this.puck.position.y);
     const firmness = clamp(distance / PASS_FULL_SPEED_DISTANCE, 0, 1);
-    this.puck.shoot(direction, passMinSpeed + (passMaxSpeed - passMinSpeed) * firmness);
+    this.puck.launch(direction, passMinSpeed + (passMaxSpeed - passMinSpeed) * firmness, 'pass');
   }
 
   private resolveSkaterCollisions(): void {
@@ -442,21 +456,92 @@ export class HockeyEngine {
     }
   }
 
-  /** Any skater touching the puck takes it, whether it is loose or carried by someone else. */
+  /**
+   * Any skater touching the puck takes it, whether it is loose or carried by someone else, except
+   * that a live shot rolls what happens instead (see `resolveShotContacts`).
+   */
   private updatePossession(): void {
-    const taker = this.skaters.find(
-      (skater) =>
-        this.puck.canBeTakenBy(skater) && this.isTouchingPuck(skater) && this.puck.isReachableFrom(skater.position),
-    );
+    if (this.puck.isLiveShot) {
+      this.resolveShotContacts();
+      return;
+    }
+
+    const taker = this.skaters.find((skater) => this.canTouchPuck(skater));
 
     if (taker) {
-      this.puck.giveTo(taker);
+      this.takePuck(taker);
+    }
+  }
 
-      // For now the player always controls whichever of their skaters has the puck.
-      if (taker.team === 'player') {
-        this.setControlledSkater(taker);
+  /**
+   * A live shot hitting a Pokémon is stopped (they take it), deflects off them, or passes straight
+   * through, rolled once per contact by `getShotContactChances`.
+   */
+  private resolveShotContacts(): void {
+    for (const skater of this.skaters) {
+      if (!this.canTouchPuck(skater)) {
+        this.puck.endShotContact(skater);
+        continue;
+      }
+
+      if (this.puck.hasShotContact(skater)) {
+        continue;
+      }
+
+      this.puck.addShotContact(skater);
+
+      switch (rollShotContact(getShotContactChances(skater, this.puck), this.random)) {
+        case 'stop':
+          this.takePuck(skater);
+          return;
+        case 'deflect':
+          // The shot is dead now; anyone else it touches takes it as a loose puck.
+          this.deflectPuckOff(skater);
+          return;
+        case 'passThrough':
+          break;
       }
     }
+  }
+
+  private canTouchPuck(skater: Skater): boolean {
+    return this.puck.canBeTakenBy(skater) && this.isTouchingPuck(skater) && this.puck.isReachableFrom(skater.position);
+  }
+
+  private takePuck(skater: Skater): void {
+    this.puck.giveTo(skater);
+
+    // For now the player always controls whichever of their skaters has the puck.
+    if (skater.team === 'player') {
+      this.setControlledSkater(skater);
+    }
+  }
+
+  /** Bounces the puck off `skater`'s body, keeping some of its speed; it's no longer a live shot. */
+  private deflectPuckOff(skater: Skater): void {
+    const { puck } = this;
+    const dx = puck.position.x - skater.position.x;
+    const dy = puck.position.y - skater.position.y;
+    const distance = Math.hypot(dx, dy);
+    const normal = distance > 0 ? { x: dx / distance, y: dy / distance } : { x: -puck.velocity.x, y: -puck.velocity.y };
+    const normalLength = Math.hypot(normal.x, normal.y) || 1;
+    normal.x /= normalLength;
+    normal.y /= normalLength;
+
+    puck.position.x = skater.position.x + normal.x * (skater.radius + puck.radius);
+    puck.position.y = skater.position.y + normal.y * (skater.radius + puck.radius);
+
+    const closingSpeed =
+      (puck.velocity.x - skater.velocity.x) * normal.x + (puck.velocity.y - skater.velocity.y) * normal.y;
+
+    if (closingSpeed < 0) {
+      puck.velocity.x -= (1 + SHOT_DEFLECT_RESTITUTION) * closingSpeed * normal.x;
+      puck.velocity.y -= (1 + SHOT_DEFLECT_RESTITUTION) * closingSpeed * normal.y;
+    }
+
+    puck.limitSpeed();
+    puck.collideWithRink();
+    puck.deflectedOff(skater);
   }
 
   private isTouchingPuck(skater: Skater): boolean {

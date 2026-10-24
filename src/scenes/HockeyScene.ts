@@ -30,8 +30,8 @@ import {
 
 /**
  * Who plays, for which team, and at which playing position; the first is the one the player
- * controls. Each team needs exactly 3 offense, 2 defense and 1 goalie; where they start comes from
- * their position (see formation.ts). Team and position live here rather than on the species so any
+ * controls. Each team needs exactly one center, left/right wing, left/right defense and goalie;
+ * where they start comes from their position (see formation.ts). Team and position live here rather than on the species so any
  * species can play anywhere. Teammates don't move yet; opponents only move while T is on.
  */
 const LINEUP: {
@@ -39,17 +39,17 @@ const LINEUP: {
   team: Team;
   playingPosition: PlayingPosition;
 }[] = [
-  { species: POKEMON_SPECIES.garchomp, team: 'player', playingPosition: 'offense' },
-  { species: POKEMON_SPECIES.gible, team: 'player', playingPosition: 'offense' },
-  { species: POKEMON_SPECIES.druddigon, team: 'player', playingPosition: 'offense' },
-  { species: POKEMON_SPECIES.gabite, team: 'player', playingPosition: 'defense' },
-  { species: POKEMON_SPECIES.golett, team: 'player', playingPosition: 'defense' },
+  { species: POKEMON_SPECIES.garchomp, team: 'player', playingPosition: 'center' },
+  { species: POKEMON_SPECIES.druddigon, team: 'player', playingPosition: 'leftWing' },
+  { species: POKEMON_SPECIES.gible, team: 'player', playingPosition: 'rightWing' },
+  { species: POKEMON_SPECIES.gabite, team: 'player', playingPosition: 'leftDefense' },
+  { species: POKEMON_SPECIES.golett, team: 'player', playingPosition: 'rightDefense' },
   { species: POKEMON_SPECIES.golurk, team: 'player', playingPosition: 'goalie' },
-  { species: POKEMON_SPECIES.flygon, team: 'opponent', playingPosition: 'offense' },
-  { species: POKEMON_SPECIES.phantump, team: 'opponent', playingPosition: 'offense' },
-  { species: POKEMON_SPECIES.tauros, team: 'opponent', playingPosition: 'offense' },
-  { species: POKEMON_SPECIES.vibrava, team: 'opponent', playingPosition: 'defense' },
-  { species: POKEMON_SPECIES.trapinch, team: 'opponent', playingPosition: 'defense' },
+  { species: POKEMON_SPECIES.flygon, team: 'opponent', playingPosition: 'center' },
+  { species: POKEMON_SPECIES.phantump, team: 'opponent', playingPosition: 'leftWing' },
+  { species: POKEMON_SPECIES.tauros, team: 'opponent', playingPosition: 'rightWing' },
+  { species: POKEMON_SPECIES.trapinch, team: 'opponent', playingPosition: 'leftDefense' },
+  { species: POKEMON_SPECIES.vibrava, team: 'opponent', playingPosition: 'rightDefense' },
   { species: POKEMON_SPECIES.trevenant, team: 'opponent', playingPosition: 'goalie' },
 ];
 const SPRITE_SCALE = 1.7;

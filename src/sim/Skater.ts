@@ -75,11 +75,21 @@ export const DEFAULT_SKATER_TUNING: SkaterTuning = {
 export type Team = 'player' | 'opponent';
 
 /**
- * A Pokémon's job on its team. `bench` is for Pokémon dressed for the game but not on the ice, and
- * `reserve` for Pokémon on the roster but not in the lineup (neither used yet). Called
- * `playingPosition` on skaters because `position` is their spot on the ice.
+ * A Pokémon's job on its team. Wings and defense are left/right from the team's point of view,
+ * facing the net it attacks (see formation.ts for offense/defense/goalie groups). `bench` is for
+ * Pokémon dressed for the game but not on the ice, and `reserve` for Pokémon on the roster but not
+ * in the lineup (neither used yet). Called `playingPosition` on skaters because `position` is
+ * their spot on the ice.
  */
-export type PlayingPosition = 'offense' | 'defense' | 'goalie' | 'bench' | 'reserve';
+export type PlayingPosition =
+  | 'center'
+  | 'leftWing'
+  | 'rightWing'
+  | 'leftDefense'
+  | 'rightDefense'
+  | 'goalie'
+  | 'bench'
+  | 'reserve';
 
 /** Plain simulation state for one skater: no Phaser types, so it can run headless. */
 export class Skater implements CircleBody {

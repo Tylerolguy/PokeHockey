@@ -92,3 +92,6 @@ export const FACEOFF_DOTS: Record<Team, { endZone: Vec2[]; neutralZone: Vec2[] }
     neutralZone: LEFT_FACEOFF_DOTS.neutralZone.map(mirror),
   },
 };
+
+/** Radius of the center faceoff circle, to the outside of its line (px). */
+export const CENTER_CIRCLE_RADIUS = 141;

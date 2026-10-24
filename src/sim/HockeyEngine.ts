@@ -1,6 +1,7 @@
 import { clamp, clampDirectionToArcs, resolveCircleCollision, wrapAngle, type Vec2 } from './geometry';
 import { chasePuckControls, idleControls } from './PlayerAI';
 import { Puck } from './Puck';
+import { getStartingSpot, OPENING_FACEOFF_TEAM, type StartingSpot } from './formation';
 import { getScoringTeam } from './scoring';
 import { Skater, type Team } from './Skater';
 import { RINK_HEIGHT, RINK_WIDTH } from './rink';
@@ -74,14 +75,14 @@ export class HockeyEngine {
   private phaseSeconds = 0;
   private accumulatedSeconds = 0;
   private wasPassHeld = false;
-  /** Where and which way each skater starts; they return here after every goal. */
-  private readonly startingSpots: Map<Skater, { position: Vec2; facing: Vec2 }>;
+  /**
+   * The team whose center lines up right in front of the puck at the next faceoff: the player's
+   * team at the start, then whoever was just scored on.
+   */
+  public faceoffTeam: Team = OPENING_FACEOFF_TEAM;
 
-  /** `skaters` is everyone on the ice, placed and facing where they start; the first starts as the player's. */
+  /** `skaters` is everyone on the ice, placed for the opening faceoff; the first starts as the player's. */
   constructor(public readonly skaters: Skater[]) {
-    this.startingSpots = new Map(
-      skaters.map((skater) => [skater, { position: { ...skater.position }, facing: { ...skater.facing } }]),
-    );
     this.setControlledSkater(skaters[0]);
   }
 
@@ -226,7 +227,7 @@ export class HockeyEngine {
   /** Everyone skates back to their starting spot while the dead puck sits in the net. */
   private stepWalkBack(deltaSeconds: number): void {
     this.skaters.forEach((skater) => {
-      const spot = this.startingSpots.get(skater)!;
+      const spot = this.getFaceoffSpot(skater);
       const { move, aim } = this.walkBackControls(skater, spot.position, spot.facing);
       const { direction } = this.steer(skater, move, aim, deltaSeconds);
       skater.update(direction, deltaSeconds);
@@ -268,8 +269,12 @@ export class HockeyEngine {
     };
   }
 
+  private getFaceoffSpot(skater: Skater): StartingSpot {
+    return getStartingSpot(skater.team, skater.playingPosition, this.faceoffTeam);
+  }
+
   private isHome(skater: Skater): boolean {
-    const home = this.startingSpots.get(skater)!.position;
+    const home = this.getFaceoffSpot(skater).position;
 
     return Math.hypot(home.x - skater.position.x, home.y - skater.position.y) < HOME_RADIUS && skater.speed < HOME_SPEED;
   }
@@ -277,7 +282,7 @@ export class HockeyEngine {
   /** Snaps everyone exactly onto their spots, respawns the puck on the center dot, and starts the countdown. */
   private lineUpForFaceoff(): void {
     this.skaters.forEach((skater) => {
-      const spot = this.startingSpots.get(skater)!;
+      const spot = this.getFaceoffSpot(skater);
       skater.position.x = spot.position.x;
       skater.position.y = spot.position.y;
       skater.velocity.x = 0;
@@ -285,7 +290,9 @@ export class HockeyEngine {
       skater.setFacing(spot.facing.x, spot.facing.y);
       skater.shotCharge = undefined;
     });
-    this.setControlledSkater(this.skaters[0]);
+    // The player takes the faceoff with their center.
+    const playerCenter = this.skaters.find((skater) => skater.team === 'player' && skater.playingPosition === 'center');
+    this.setControlledSkater(playerCenter ?? this.skaters[0]);
     this.resetPuck();
     this.puckRespawns += 1;
     this.goalScoredBy = undefined;
@@ -302,6 +309,7 @@ export class HockeyEngine {
 
     this.score[scorer] += 1;
     this.goalScoredBy = scorer;
+    this.faceoffTeam = scorer === 'player' ? 'opponent' : 'player';
     this.skaters.forEach((skater) => {
       skater.shotCharge = undefined;
     });

@@ -14,7 +14,7 @@ import {
   type SkaterControls,
   type SwitchMode,
 } from '../sim/HockeyEngine';
-import { assignStartingSpots } from '../sim/formation';
+import { assignStartingSpots, OPENING_FACEOFF_TEAM } from '../sim/formation';
 import { Skater, type PlayingPosition, type Team } from '../sim/Skater';
 import { clamp, lerpVec, type CircleBody, type Vec2 } from '../sim/geometry';
 import { PUCK_RADIUS } from '../sim/Puck';
@@ -140,7 +140,7 @@ export class HockeyScene extends Phaser.Scene {
     this.add.image(0, 0, RINK_BACKGROUND_KEY).setOrigin(0, 0);
     this.boundsDebug = this.drawBounds();
 
-    const startingSpots = assignStartingSpots(LINEUP);
+    const startingSpots = assignStartingSpots(LINEUP, OPENING_FACEOFF_TEAM);
     const skaters = LINEUP.map(({ species, team, playingPosition }, index) => {
       const { position, facing } = startingSpots[index];
       const skater = new Skater(position, team, playingPosition, species.tuning);

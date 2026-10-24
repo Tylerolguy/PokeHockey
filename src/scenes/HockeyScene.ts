@@ -18,15 +18,7 @@ import { assignStartingSpots, OPENING_FACEOFF_TEAM } from '../sim/formation';
 import { Skater, type PlayingPosition, type Team } from '../sim/Skater';
 import { clamp, lerpVec, type CircleBody, type Vec2 } from '../sim/geometry';
 import { PUCK_RADIUS } from '../sim/Puck';
-import {
-  RINK_BACKGROUND_KEY,
-  RINK_BACKGROUND_PATH,
-  RINK_HEIGHT,
-  RINK_ICE,
-  RINK_NET_WALLS,
-  RINK_NETS,
-  RINK_WIDTH,
-} from '../sim/rink';
+import { RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RINK_WIDTH } from '../sim/rink';
 
 /**
  * Who plays, for which team, and at which playing position; the first is the one the player
@@ -114,7 +106,6 @@ export class HockeyScene extends Phaser.Scene {
   /** Facing pointer that rides on the controlled skater's ring. */
   private controlPointer!: Phaser.GameObjects.Graphics;
   private moveKeys!: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
-  private boundsDebug!: Phaser.GameObjects.Graphics;
   private helpText!: Phaser.GameObjects.Text;
   private scoreTexts!: Record<Team, Phaser.GameObjects.Text>;
   private goalBanner!: Phaser.GameObjects.Text;
@@ -138,7 +129,6 @@ export class HockeyScene extends Phaser.Scene {
 
   create(): void {
     this.add.image(0, 0, RINK_BACKGROUND_KEY).setOrigin(0, 0);
-    this.boundsDebug = this.drawBounds();
 
     const startingSpots = assignStartingSpots(LINEUP, OPENING_FACEOFF_TEAM);
     const skaters = LINEUP.map(({ species, team, playingPosition }, index) => {
@@ -161,7 +151,6 @@ export class HockeyScene extends Phaser.Scene {
 
     const keyboard = this.input.keyboard!;
     this.moveKeys = keyboard.addKeys({ up: 'W', down: 'S', left: 'A', right: 'D' }) as typeof this.moveKeys;
-    keyboard.on('keydown-B', () => this.boundsDebug.setVisible(!this.boundsDebug.visible));
     keyboard.on('keydown-R', () => this.engine.resetPuck());
     keyboard.addCapture('SPACE');
     keyboard.on('keydown-SPACE', () => {
@@ -298,7 +287,7 @@ export class HockeyScene extends Phaser.Scene {
       `${MOVEMENT_SCHEME_HELP[this.movementScheme]}   M: switch controls (${this.movementScheme})   ` +
         'Mouse: aim   Left click: shoot (hold to charge)   Right click: pass\n' +
         `Space: switch player (without the puck)   C: switch mode (${SWITCH_MODE_LABELS[this.switchMode]})   ` +
-        `R: reset puck   T: enemy chases puck (${this.engine.opponentsChasePuck ? 'on' : 'off'})   B: boundaries`,
+        `R: reset puck   T: enemy chases puck (${this.engine.opponentsChasePuck ? 'on' : 'off'})`,
     );
   }
 
@@ -456,26 +445,6 @@ export class HockeyScene extends Phaser.Scene {
     graphics.fillCircle(0, 0, PUCK_RADIUS);
     graphics.lineStyle(2, 0x3a3f4a, 1);
     graphics.strokeCircle(0, 0, PUCK_RADIUS - 2);
-
-    return graphics;
-  }
-
-  private drawBounds(): Phaser.GameObjects.Graphics {
-    const graphics = this.add.graphics();
-    graphics.lineStyle(3, 0xffd400, 0.9);
-    graphics.strokeRoundedRect(
-      RINK_ICE.left,
-      RINK_ICE.top,
-      RINK_ICE.right - RINK_ICE.left,
-      RINK_ICE.bottom - RINK_ICE.top,
-      RINK_ICE.cornerRadius,
-    );
-
-    // Outline: what stops skaters. Filled walls: what stops the puck (front left open).
-    graphics.lineStyle(2, 0xff00ff, 0.6);
-    RINK_NETS.forEach((net) => graphics.strokeRect(net.left, net.top, net.right - net.left, net.bottom - net.top));
-    graphics.fillStyle(0xff00ff, 0.9);
-    RINK_NET_WALLS.forEach((wall) => graphics.fillRect(wall.left, wall.top, wall.right - wall.left, wall.bottom - wall.top));
 
     return graphics;
   }

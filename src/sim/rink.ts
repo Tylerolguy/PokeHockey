@@ -2,25 +2,31 @@ import type { Rect, RoundedRect, Vec2 } from './geometry';
 import type { Team } from './Skater';
 
 export const RINK_BACKGROUND_KEY = 'rink-background';
-export const RINK_BACKGROUND_PATH = 'assets/backgrounds/retro-hockey-rink-pokeball-balanced.png';
+export const RINK_BACKGROUND_PATH = 'assets/backgrounds/retro-hockey-rink-pokeball-final-spacing.png';
 
 /** Pixel size of the background image; the world uses the same coordinates. */
-export const RINK_WIDTH = 1672;
-export const RINK_HEIGHT = 941;
+export const RINK_WIDTH = 1728;
+export const RINK_HEIGHT = 910;
+
+/**
+ * The center faceoff dot (middle of the Poke Ball). Not the image's center: the rink sits a little
+ * above the middle of the art.
+ */
+export const CENTER_DOT: Vec2 = { x: RINK_WIDTH / 2, y: 443 };
 
 /** Inside edge of the boards, measured from the background image. */
 export const RINK_ICE: RoundedRect = {
-  left: 46,
-  top: 104,
-  right: 1626,
-  bottom: 828,
-  cornerRadius: 205,
+  left: 44,
+  top: 115,
+  right: 1684,
+  bottom: 768,
+  cornerRadius: 180,
 };
 
 /** Net frames, from the back of the net to the goal line. Skaters treat these as solid. */
 export const RINK_NETS: Rect[] = [
-  { left: 186, top: 390, right: 246, bottom: 536 },
-  { left: 1424, top: 390, right: 1486, bottom: 536 },
+  { left: 160, top: 378, right: 218, bottom: 506 },
+  { left: RINK_WIDTH - 218, top: 378, right: RINK_WIDTH - 160, bottom: 506 },
 ];
 
 const NET_WALL_THICKNESS = 6;
@@ -59,12 +65,14 @@ export const BOARD_RESTITUTION = 0.35;
 export const NET_RESTITUTION = 0.2;
 
 /** Rink markings measured from the background image (left half; the right half mirrors it). */
-const END_ZONE_DOT_X = 440;
-const NEUTRAL_ZONE_DOT_X = 648;
-const UPPER_DOT_Y = 270;
-const LOWER_DOT_Y = 669;
+const END_ZONE_DOT_X = 400;
+const END_ZONE_UPPER_DOT_Y = 270;
+const END_ZONE_LOWER_DOT_Y = 624;
+const NEUTRAL_ZONE_DOT_X = 706;
+const NEUTRAL_ZONE_UPPER_DOT_Y = 263;
+const NEUTRAL_ZONE_LOWER_DOT_Y = 621;
 /** How far the goal crease reaches out from the goal line (px). */
-export const CREASE_DEPTH = 74;
+export const CREASE_DEPTH = 67;
 
 /** Mirrors a left-half point onto the right half of the rink. */
 function mirror(point: Vec2): Vec2 {
@@ -74,13 +82,13 @@ function mirror(point: Vec2): Vec2 {
 const LEFT_FACEOFF_DOTS = {
   /** The two dots inside each end zone. */
   endZone: [
-    { x: END_ZONE_DOT_X, y: UPPER_DOT_Y },
-    { x: END_ZONE_DOT_X, y: LOWER_DOT_Y },
+    { x: END_ZONE_DOT_X, y: END_ZONE_UPPER_DOT_Y },
+    { x: END_ZONE_DOT_X, y: END_ZONE_LOWER_DOT_Y },
   ],
   /** The two dots just outside each blue line, in the neutral zone. */
   neutralZone: [
-    { x: NEUTRAL_ZONE_DOT_X, y: UPPER_DOT_Y },
-    { x: NEUTRAL_ZONE_DOT_X, y: LOWER_DOT_Y },
+    { x: NEUTRAL_ZONE_DOT_X, y: NEUTRAL_ZONE_UPPER_DOT_Y },
+    { x: NEUTRAL_ZONE_DOT_X, y: NEUTRAL_ZONE_LOWER_DOT_Y },
   ],
 };
 
@@ -94,4 +102,4 @@ export const FACEOFF_DOTS: Record<Team, { endZone: Vec2[]; neutralZone: Vec2[] }
 };
 
 /** Radius of the center faceoff circle, to the outside of its line (px). */
-export const CENTER_CIRCLE_RADIUS = 141;
+export const CENTER_CIRCLE_RADIUS = 118;

@@ -1,5 +1,5 @@
 import type { Vec2 } from './geometry';
-import { CENTER_CIRCLE_RADIUS, CREASE_DEPTH, DEFENDED_GOAL, FACEOFF_DOTS, RINK_HEIGHT, RINK_WIDTH } from './rink';
+import { CENTER_CIRCLE_RADIUS, CENTER_DOT, CREASE_DEPTH, DEFENDED_GOAL, FACEOFF_DOTS } from './rink';
 import type { PlayingPosition, Team } from './Skater';
 
 /** Positions that take the ice; every team dresses exactly one of each. */
@@ -63,8 +63,8 @@ function getFormationSpots(team: Team, faceoffTeam: Team): Record<OnIcePosition,
   return {
     goalie: { x: goal.x + upIce * (CREASE_DEPTH / 2), y: goal.y },
     center: {
-      x: RINK_WIDTH / 2 - upIce * (team === faceoffTeam ? CENTER_WITH_ADVANTAGE_GAP : CENTER_WITHOUT_ADVANTAGE_GAP),
-      y: RINK_HEIGHT / 2,
+      x: CENTER_DOT.x - upIce * (team === faceoffTeam ? CENTER_WITH_ADVANTAGE_GAP : CENTER_WITHOUT_ADVANTAGE_GAP),
+      y: CENTER_DOT.y,
     },
     leftWing: neutralZone[leftSide],
     rightWing: neutralZone[rightSide],

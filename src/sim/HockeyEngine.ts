@@ -7,7 +7,7 @@ import { getScoringTeam } from './scoring';
 import { getShotSpeed, isWhiff } from './shotCharge';
 import { getShotContactChances, rollShotContact } from './shotContact';
 import { Skater, type Team } from './Skater';
-import { RINK_HEIGHT, RINK_WIDTH } from './rink';
+import { CENTER_DOT } from './rink';
 
 /** Fixed simulation step, so physics behave the same at any frame rate. */
 const STEP_SECONDS = 1 / 120;
@@ -30,8 +30,6 @@ const WALK_BACK_MAX_SECONDS = 5;
 const WALK_BACK_ARRIVE_GAIN = 2.5;
 /** Frozen countdown before play resumes after a goal (s). */
 const COUNTDOWN_SECONDS = 3;
-/** The center faceoff dot. */
-const CENTER_ICE: Vec2 = { x: RINK_WIDTH / 2, y: RINK_HEIGHT / 2 };
 
 /** Ways of steering a skater; the player can switch between them to compare feel. */
 export type MovementControls =
@@ -67,7 +65,7 @@ export type SwitchMode = 'nextInList' | 'closestToAim';
 
 /** Runs one match's simulation. Knows nothing about Phaser. */
 export class HockeyEngine {
-  public readonly puck = new Puck(CENTER_ICE);
+  public readonly puck = new Puck(CENTER_DOT);
   /** Temporary testing switch: when on, opponents skate after the puck; when off, they stand still. */
   public opponentsChasePuck = false;
   /** Goals scored by each team. */
@@ -166,7 +164,7 @@ export class HockeyEngine {
       this.puck.carrier.shotCharge = undefined;
     }
 
-    this.puck.resetTo(CENTER_ICE);
+    this.puck.resetTo(CENTER_DOT);
   }
 
   /** Direction a shot would travel: the aim, limited to the skater's shooting arcs (if any) around their facing. */

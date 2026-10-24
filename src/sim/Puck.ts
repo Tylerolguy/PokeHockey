@@ -7,9 +7,12 @@ export const PUCK_RADIUS = 7;
 const PUCK_FRICTION = 60;
 const PUCK_MAX_SPEED = 1100;
 /** Pucks are lively off the boards. */
-const PUCK_BOARD_RESTITUTION = 0.75;
-/** Net mesh soaks up the puck so goals stay in. */
-const PUCK_NET_RESTITUTION = 0.05;
+const PUCK_BOARD_RESTITUTION = 0.65;
+/**
+ * Pucks bounce off the net frame too, just less than off the boards. Goals still count: a goal is
+ * scored as soon as the puck crosses the goal line, before it reaches the back of the net.
+ */
+const PUCK_NET_RESTITUTION = 0.4;
 /** Gap between a carrier's collision circle and the carried puck. */
 const CARRY_GAP = 3;
 /** After letting go, the same skater can't instantly re-grab the puck (so shots leave the stick). */

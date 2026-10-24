@@ -1,7 +1,8 @@
 import { clamp, clampDirectionToArcs, resolveCircleCollision, wrapAngle, type Vec2 } from './geometry';
 import { chasePuckControls, idleControls } from './PlayerAI';
 import { Puck } from './Puck';
-import { Skater } from './Skater';
+import { getScoringTeam } from './scoring';
+import { Skater, type Team } from './Skater';
 import { RINK_HEIGHT, RINK_WIDTH } from './rink';
 
 /** Fixed simulation step, so physics behave the same at any frame rate. */
@@ -12,6 +13,8 @@ const MAX_FRAME_SECONDS = 0.1;
 const PASS_FULL_SPEED_DISTANCE = 700;
 /** How bouncy skater-on-skater hits are. */
 const SKATER_RESTITUTION = 0.3;
+/** How long the puck stays in the net after a goal before going back to center ice (s). */
+const GOAL_RESET_SECONDS = 1;
 /** The center faceoff dot. */
 const CENTER_ICE: Vec2 = { x: RINK_WIDTH / 2, y: RINK_HEIGHT / 2 };
 
@@ -43,6 +46,11 @@ export class HockeyEngine {
   public readonly puck = new Puck(CENTER_ICE);
   /** Temporary testing switch: when on, opponents skate after the puck; when off, they stand still. */
   public opponentsChasePuck = false;
+  /** Goals scored by each team. */
+  public readonly score: Record<Team, number> = { player: 0, opponent: 0 };
+  /** The team that just scored, while the puck sits in the net before going back to center ice. */
+  public goalScoredBy?: Team;
+  private goalResetSeconds = 0;
   private accumulatedSeconds = 0;
   private wasPassHeld = false;
 
@@ -104,8 +112,10 @@ export class HockeyEngine {
     }
   }
 
-  /** Drops the puck, loose and still, back on the center dot. */
+  /** Drops the puck, loose and still, back on the center dot (ending any goal celebration). */
   resetPuck(): void {
+    this.goalScoredBy = undefined;
+
     if (this.puck.carrier) {
       this.puck.carrier.shotCharge = undefined;
     }
@@ -154,8 +164,44 @@ export class HockeyEngine {
       skater.update(direction, deltaSeconds, moveScale);
     });
     this.resolveSkaterCollisions();
-    this.updatePossession();
+
+    // After a goal the puck is dead: nobody can touch it until it's back at center ice.
+    if (!this.goalScoredBy) {
+      this.updatePossession();
+    }
+
     this.puck.update(deltaSeconds);
+    this.updateScoring(deltaSeconds);
+  }
+
+  /** Counts a goal when the puck crosses into a net, then puts the puck back on the center dot. */
+  private updateScoring(deltaSeconds: number): void {
+    if (this.goalScoredBy) {
+      this.goalResetSeconds -= deltaSeconds;
+
+      if (this.goalResetSeconds <= 0) {
+        this.goalScoredBy = undefined;
+        this.resetPuck();
+      }
+
+      return;
+    }
+
+    const scorer = getScoringTeam(this.puck);
+
+    if (!scorer) {
+      return;
+    }
+
+    this.score[scorer] += 1;
+    this.goalScoredBy = scorer;
+    this.goalResetSeconds = GOAL_RESET_SECONDS;
+
+    // Carried in: the puck stays in the net and the carrier skates on without it.
+    if (this.puck.carrier) {
+      this.puck.carrier.shotCharge = undefined;
+      this.puck.release({ x: 0, y: 0 });
+    }
   }
 
   /** The player's controls for the controlled skater; AI or idle controls for everyone else. */

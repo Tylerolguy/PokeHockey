@@ -1,4 +1,5 @@
-import type { Rect, RoundedRect } from './geometry';
+import type { Rect, RoundedRect, Vec2 } from './geometry';
+import type { Team } from './Skater';
 
 export const RINK_BACKGROUND_KEY = 'rink-background';
 export const RINK_BACKGROUND_PATH = 'assets/backgrounds/retro-hockey-rink-pokeball-balanced.png';
@@ -40,6 +41,19 @@ export const RINK_NET_WALLS: Rect[] = RINK_NETS.flatMap((net) => {
     { left: net.left, right: net.right, top: net.bottom - NET_WALL_THICKNESS, bottom: net.bottom },
   ];
 });
+
+/** Center of each net's open front (on the goal line), in `RINK_NETS` order: where shots aim and goalies guard. */
+export const GOAL_MOUTHS: Vec2[] = RINK_NETS.map((net) => {
+  const opensRight = (net.left + net.right) / 2 < RINK_WIDTH / 2;
+
+  return { x: opensRight ? net.right : net.left, y: (net.top + net.bottom) / 2 };
+});
+
+/** Which goal each team defends: the player's team starts on the left, so defends the left net. */
+export const DEFENDED_GOAL: Record<Team, Vec2> = {
+  player: GOAL_MOUTHS[0],
+  opponent: GOAL_MOUTHS[1],
+};
 
 export const BOARD_RESTITUTION = 0.35;
 export const NET_RESTITUTION = 0.2;

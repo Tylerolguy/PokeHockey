@@ -31,9 +31,14 @@ export interface SkaterTuning {
   turningMoveScale: number;
   /** rad/s the carried puck swings around to the new facing; a future puck-control stat */
   puckHandlingTurnRate: number;
-  /** px/s of a tapped wrist shot / a fully charged slapshot; a future shooting stat */
-  shotMinSpeed: number;
-  shotMaxSpeed: number;
+  /** px/s of a perfectly timed shot (100% power); a future shooting stat */
+  shotPeakSpeed: number;
+  /**
+   * Shot power (0..1 of `shotPeakSpeed`) by how long shoot was held (s), as points joined by
+   * straight lines: a quick tap is weak, it builds to a sweet spot, then falls off sharply before a
+   * whiff. Points must be in order of `seconds`.
+   */
+  shotPowerCurve: ShotPowerPoint[];
   /**
    * Optional limit on where shots can go, as arcs relative to facing (offset 0 = straight ahead,
    * PI = behind). Unset means shots go wherever aimed. Kept for special moves, e.g.
@@ -41,13 +46,20 @@ export interface SkaterTuning {
    * `{ offset: Math.PI, halfAngle: ... }` for a behind-the-back shot.
    */
   shotArcs?: Arc[];
-  /** seconds of holding shoot to reach full power */
-  shotChargeSeconds: number;
+  /** Holding a charge this long (s) whiffs: the puck dribbles off at `whiffSpeed` px/s in a random direction. */
+  shotWhiffSeconds: number;
+  whiffSpeed: number;
   /** acceleration and top speed multiplier while winding up a shot */
   chargingMoveScale: number;
   /** px/s of the softest (short) and firmest (long) pass; a future passing stat */
   passMinSpeed: number;
   passMaxSpeed: number;
+}
+
+/** One point on a shot power curve: holding shoot for `seconds` gives `power` (0..1). */
+export interface ShotPowerPoint {
+  seconds: number;
+  power: number;
 }
 
 export const DEFAULT_SKATER_TUNING: SkaterTuning = {
@@ -63,9 +75,18 @@ export const DEFAULT_SKATER_TUNING: SkaterTuning = {
   reverseMoveScale: 0.55,
   turningMoveScale: 0.75,
   puckHandlingTurnRate: 14,
-  shotMinSpeed: 650,
-  shotMaxSpeed: 1100,
-  shotChargeSeconds: 0.8,
+  shotPeakSpeed: 1350,
+  shotPowerCurve: [
+    { seconds: 0, power: 0.5 },
+    { seconds: 0.55, power: 0.8 },
+    { seconds: 0.8, power: 0.9 },
+    { seconds: 0.88, power: 1 },
+    { seconds: 1.1, power: 0.9 },
+    { seconds: 1.18, power: 0.6 },
+    { seconds: 1.4, power: 0.2 },
+  ],
+  shotWhiffSeconds: 1.45,
+  whiffSpeed: 120,
   chargingMoveScale: 0.55,
   passMinSpeed: 500,
   passMaxSpeed: 800,

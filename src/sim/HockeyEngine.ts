@@ -4,6 +4,7 @@ import { Puck } from './Puck';
 import { getStartingSpot, OPENING_FACEOFF_TEAM, type StartingSpot } from './formation';
 import { createRandom } from './random';
 import { getScoringTeam } from './scoring';
+import { getShotSpeed, isWhiff } from './shotCharge';
 import { getShotContactChances, rollShotContact } from './shotContact';
 import { Skater, type Team } from './Skater';
 import { RINK_HEIGHT, RINK_WIDTH } from './rink';
@@ -421,16 +422,29 @@ export class HockeyEngine {
       this.pass(aimDirection, controls.aim, skater);
     } else if (controls.shoot) {
       skater.shotCharge = (skater.shotCharge ?? 0) + deltaSeconds;
+
+      // Held too long: the shot is whiffed and goes off on its own.
+      if (isWhiff(skater.tuning, skater.shotCharge)) {
+        this.whiff(skater);
+      }
     } else if (skater.shotCharge !== undefined) {
       this.shoot(skater, this.getShotDirection(skater, controls.aim));
     }
   }
 
+  /** Releases a shot; its speed depends on how long it was charged (see shotCharge.ts). */
   private shoot(skater: Skater, direction: Vec2): void {
-    const { shotMinSpeed, shotMaxSpeed, shotChargeSeconds } = skater.tuning;
-    const power = clamp((skater.shotCharge ?? 0) / shotChargeSeconds, 0, 1);
+    const speed = getShotSpeed(skater.tuning, skater.shotCharge ?? 0);
     skater.shotCharge = undefined;
-    this.puck.launch(direction, shotMinSpeed + (shotMaxSpeed - shotMinSpeed) * power, 'shot');
+    this.puck.launch(direction, speed, 'shot');
+  }
+
+  /** A fumbled over-charged shot: the puck dribbles off slowly somewhere in front of the skater. */
+  private whiff(skater: Skater): void {
+    const facing = Math.atan2(skater.facing.y, skater.facing.x);
+    const angle = facing + (this.random() - 0.5) * Math.PI;
+    skater.shotCharge = undefined;
+    this.puck.launch({ x: Math.cos(angle), y: Math.sin(angle) }, skater.tuning.whiffSpeed, 'whiff');
   }
 
   /** Short passes are soft, long ones firm, so they stay catchable. */

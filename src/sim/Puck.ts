@@ -5,7 +5,12 @@ import type { Skater } from './Skater';
 export const PUCK_RADIUS = 7;
 /** px/s² of ice friction; low so the puck keeps its momentum. */
 const PUCK_FRICTION = 60;
-const PUCK_MAX_SPEED = 1100;
+const PUCK_MAX_SPEED = 1400;
+/**
+ * The puck moves in steps of at most this far (px) per update, so even the fastest shot can't skip
+ * through a thin net wall between two positions.
+ */
+const MAX_MOVE_PER_SUBSTEP = 4;
 /** Pucks are lively off the boards. */
 const PUCK_BOARD_RESTITUTION = 0.65;
 /**
@@ -20,8 +25,11 @@ const REGRAB_COOLDOWN_SECONDS = 0.3;
 /** A shot stops being live (and plays like any loose puck) once it slows below this (px/s). */
 const LIVE_SHOT_MIN_SPEED = 300;
 
-/** How a puck left the stick: shots can pass through or deflect off Pokémon, passes can't. */
-export type LaunchKind = 'shot' | 'pass';
+/**
+ * How a puck left the stick: shots can pass through or deflect off Pokémon; passes and whiffed
+ * shots are taken by whoever touches them.
+ */
+export type LaunchKind = 'shot' | 'pass' | 'whiff';
 
 export class Puck implements CircleBody {
   public readonly position: Vec2;
@@ -160,9 +168,15 @@ export class Puck implements CircleBody {
     }
 
     this.applyFriction(PUCK_FRICTION * deltaSeconds);
-    this.position.x += this.velocity.x * deltaSeconds;
-    this.position.y += this.velocity.y * deltaSeconds;
-    const bounced = this.collideWithRink();
+
+    const substeps = Math.max(1, Math.ceil((this.speed * deltaSeconds) / MAX_MOVE_PER_SUBSTEP));
+    let bounced = false;
+
+    for (let i = 0; i < substeps; i++) {
+      this.position.x += (this.velocity.x * deltaSeconds) / substeps;
+      this.position.y += (this.velocity.y * deltaSeconds) / substeps;
+      bounced = this.collideWithRink() || bounced;
+    }
 
     if (this.liveShot && (bounced || this.speed < LIVE_SHOT_MIN_SPEED)) {
       this.endLiveShot();

@@ -17,6 +17,7 @@ import {
 import { assignStartingSpots, OPENING_FACEOFF_TEAM } from '../sim/formation';
 import { Skater, type PlayingPosition, type Team } from '../sim/Skater';
 import { clamp, lerpVec, type CircleBody, type Vec2 } from '../sim/geometry';
+import { getShotPower } from '../sim/shotCharge';
 import { PUCK_RADIUS } from '../sim/Puck';
 import { RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RINK_WIDTH } from '../sim/rink';
 
@@ -66,7 +67,21 @@ const PUCK_RESPAWN_POP_MS = 300;
 const WALK_ANIMATION_MIN_SPEED = 25;
 const AIM_LINE_LENGTH = 70;
 const AIM_LINE_CHARGED_LENGTH = 150;
-const CHARGE_BAR_WIDTH = 48;
+/** Shot meter above the carrier: spans the whole charge up to the whiff point. */
+const CHARGE_BAR_WIDTH = 80;
+const CHARGE_BAR_HEIGHT = 8;
+/** The meter is drawn as this many colored slices, each showing the power you'd get there. */
+const CHARGE_BAR_SLICES = 40;
+/** How bright the part of the meter not charged through yet is (0..1). */
+const CHARGE_BAR_AHEAD_ALPHA = 0.45;
+/** Shot power (0..1) to color: red when weak, through orange and yellow, to green at full power. */
+const POWER_COLOR_STOPS: { power: number; color: number }[] = [
+  { power: 0.2, color: 0xff3b2b },
+  { power: 0.5, color: 0xffa424 },
+  { power: 0.8, color: 0xffe14d },
+  { power: 0.9, color: 0xb6f04a },
+  { power: 1, color: 0x3ddc6e },
+];
 const SHOT_ARC_EDGE_LENGTH = 110;
 /**
  * Ring on the ice around each skater in their team color. The controlled skater's ring also gets
@@ -400,7 +415,10 @@ export class HockeyScene extends Phaser.Scene {
     }
 
     const direction = this.engine.getShotDirection(skater, aim);
-    const charge = skater.shotCharge === undefined ? undefined : clamp(skater.shotCharge / skater.tuning.shotChargeSeconds, 0, 1);
+    const { tuning } = skater;
+    const chargeSeconds = skater.shotCharge;
+    const charge = chargeSeconds === undefined ? undefined : getShotPower(tuning, chargeSeconds);
+    const chargeColor = charge === undefined ? 0xffffff : getPowerColor(charge);
     const length = AIM_LINE_LENGTH + (AIM_LINE_CHARGED_LENGTH - AIM_LINE_LENGTH) * (charge ?? 0);
     const start = this.getDrawPosition(puck);
 
@@ -423,18 +441,40 @@ export class HockeyScene extends Phaser.Scene {
       }
     }
 
-    this.aimGraphics.lineStyle(3, charge === undefined ? 0xffffff : 0xffa424, charge === undefined ? 0.6 : 0.95);
+    this.aimGraphics.lineStyle(3, chargeColor, charge === undefined ? 0.6 : 0.95);
     this.aimGraphics.lineBetween(start.x, start.y, start.x + direction.x * length, start.y + direction.y * length);
 
-    if (charge !== undefined) {
-      const skaterPosition = this.getDrawPosition(skater);
-      const barX = skaterPosition.x - CHARGE_BAR_WIDTH / 2;
-      const barY = skaterPosition.y - 58;
-      this.aimGraphics.fillStyle(0x000000, 0.6);
-      this.aimGraphics.fillRect(barX - 2, barY - 2, CHARGE_BAR_WIDTH + 4, 10);
-      this.aimGraphics.fillStyle(charge >= 1 ? 0xff4b2b : 0xffa424, 1);
-      this.aimGraphics.fillRect(barX, barY, CHARGE_BAR_WIDTH * charge, 6);
+    if (chargeSeconds !== undefined) {
+      this.drawChargeMeter(skater, chargeSeconds);
     }
+  }
+
+  /**
+   * The meter covers the whole charge up to the whiff. Every part of it is colored by the shot
+   * power you'd get releasing there; what's been charged through is bright, the rest dim, and a
+   * white tick marks the current charge.
+   */
+  private drawChargeMeter(skater: Skater, chargeSeconds: number): void {
+    const { tuning } = skater;
+    const skaterPosition = this.getDrawPosition(skater);
+    const barX = skaterPosition.x - CHARGE_BAR_WIDTH / 2;
+    const barY = skaterPosition.y - 58;
+    const sliceWidth = CHARGE_BAR_WIDTH / CHARGE_BAR_SLICES;
+    const chargedWidth = (CHARGE_BAR_WIDTH * clamp(chargeSeconds, 0, tuning.shotWhiffSeconds)) / tuning.shotWhiffSeconds;
+    const graphics = this.aimGraphics;
+
+    graphics.fillStyle(0x000000, 0.6);
+    graphics.fillRect(barX - 2, barY - 2, CHARGE_BAR_WIDTH + 4, CHARGE_BAR_HEIGHT + 4);
+
+    for (let i = 0; i < CHARGE_BAR_SLICES; i++) {
+      const sliceSeconds = ((i + 0.5) / CHARGE_BAR_SLICES) * tuning.shotWhiffSeconds;
+      const charged = (i + 0.5) * sliceWidth <= chargedWidth;
+      graphics.fillStyle(getPowerColor(getShotPower(tuning, sliceSeconds)), charged ? 1 : CHARGE_BAR_AHEAD_ALPHA);
+      graphics.fillRect(barX + i * sliceWidth, barY, sliceWidth + 0.5, CHARGE_BAR_HEIGHT);
+    }
+
+    graphics.fillStyle(0xffffff, 1);
+    graphics.fillRect(barX + chargedWidth - 1, barY - 2, 2, CHARGE_BAR_HEIGHT + 4);
   }
 
   private drawPuck(): Phaser.GameObjects.Graphics {
@@ -448,4 +488,35 @@ export class HockeyScene extends Phaser.Scene {
 
     return graphics;
   }
+}
+
+/** Blends between `POWER_COLOR_STOPS` for a shot power (0..1). */
+function getPowerColor(power: number): number {
+  const stops = POWER_COLOR_STOPS;
+
+  if (power <= stops[0].power) {
+    return stops[0].color;
+  }
+
+  for (let i = 1; i < stops.length; i++) {
+    if (power <= stops[i].power) {
+      const t = (power - stops[i - 1].power) / (stops[i].power - stops[i - 1].power);
+
+      return blendColors(stops[i - 1].color, stops[i].color, t);
+    }
+  }
+
+  return stops[stops.length - 1].color;
+}
+
+/** Mixes two 0xRRGGBB colors, `t` (0..1) of the way from `from` to `to`. */
+function blendColors(from: number, to: number, t: number): number {
+  const channel = (shift: number) => {
+    const a = (from >> shift) & 0xff;
+    const b = (to >> shift) & 0xff;
+
+    return Math.round(a + (b - a) * t) << shift;
+  };
+
+  return channel(16) | channel(8) | channel(0);
 }

@@ -99,6 +99,125 @@ A 2D, top-down, directly controlled arcade hockey game featuring Pokémon as pla
 - Movement and shooting feel enjoyable without Pokémon moves or collection systems.
 - The architecture can add AI teammates, new Pokémon and moves without rewriting the simulation.
 
+## 13. Current Implementation
+
+Snapshot of what's built on `main` as of 2026-10-24. The numbers are current tuning, not final balance. Each item names where the value lives in the code.
+
+### Structure
+
+- **Stack:** TypeScript, Phaser 3 and Vite, as planned.
+- **Simulation:** in `src/sim/`, with no Phaser. It runs on its own: `HockeyEngine`, `Skater`, `Puck`, the rink geometry, the formation and the scoring.
+- **Presentation:** `HockeyScene` handles input, drawing and the HUD.
+- **Camera:** zoomed in 1.6× and following the controlled Pokémon, so only part of the 1728×910 rink is on screen at once. The HUD sits on a separate fixed camera. When the puck is off screen, a marker at the screen edge points to it.
+- **Fixed step:** the simulation updates at 120 Hz. Drawing blends positions between the last two updates, so motion stays smooth at any refresh rate.
+- **Deterministic:** random rolls use a seeded generator, so the same inputs replay the same match. This is groundwork for replays and multiplayer.
+- **Species data:** `src/data/pokemonSpecies.ts`. Each species overrides the default tuning; only mass is set per species so far.
+
+### Teams and Positions
+
+- **6 per side:** center, left wing, right wing, left defense, right defense and goalie. Each team must have exactly one of each, or the game won't start.
+- **Left and right** are from the team's own attacking point of view.
+- **`bench` and `reserve`** positions exist but aren't used yet.
+- **Lineup:**
+
+| Position | Player team | Opponents |
+| --- | --- | --- |
+| Center | Garchomp (95 kg) | Flygon (82 kg) |
+| Left wing | Druddigon (139 kg) | Phantump (7 kg) |
+| Right wing | Gible (20.5 kg) | Tauros (88.4 kg) |
+| Left defense | Gabite (56 kg) | Trapinch (15 kg) |
+| Right defense | Golett (92 kg) | Vibrava (15.3 kg) |
+| Goalie | Golurk (330 kg) | Trevenant (71 kg) |
+
+- **Masses** are Pokédex weights and decide who gets pushed around in collisions.
+- **Formation spots** (`formation.ts`; rink markings measured from the art and kept in `rink.ts`):
+  - **Goalie:** the middle of their crease.
+  - **Defense:** the faceoff dots in their own end zone.
+  - **Wings:** the dots just outside their own blue line.
+  - **Center:** depends on the faceoff advantage, below.
+- **Faceoff advantage:** the team with the advantage puts its center 32 px from the puck. The other team's center waits outside the center circle, about 148 px back. The player's team has the advantage at the start of the game, then whoever was just scored on.
+
+### Controls
+
+The current default is the "mouse-facing" movement scheme.
+
+| Input | Action |
+| --- | --- |
+| WASD | Skate in screen directions, at full speed in any direction |
+| Mouse | Facing and aim; the skater turns toward the cursor at 7 rad/s |
+| Left click | Shoot: hold to charge, release to fire |
+| Right click | Pass toward the cursor (500–800 px/s, firmer for longer passes, full firmness at 700 px) |
+| Space | Switch to another teammate, only when not carrying the puck |
+
+- **Who you control:** the player always controls exactly one Pokémon (`controlledByPlayer`). Control moves automatically to whichever teammate gains the puck. You start each faceoff on your center.
+- **Testing-only keys** (to be removed):
+  - **M:** cycle movement schemes (mouse-facing, directional, tank).
+  - **C:** Space switching mode (next in lineup, or closest to the mouse).
+  - **R:** reset the puck to center.
+  - **T:** opponents chase the puck.
+
+### Skating (`DEFAULT_SKATER_TUNING`)
+
+- **Top speed:** 340 px/s.
+- **Acceleration:** 1100 px/s² from a standstill, fading to 110 near top speed. About 0.8 s to reach top speed.
+- **Ice feel:**
+  - **Carving:** changing direction keeps speed, turning at up to 900 px/s² of grip (tighter when slow, wider when fast).
+  - **Braking:** pushing against your motion brakes at 650 px/s².
+  - **Coasting:** with no input you glide, slowing at 160 px/s². About 360 px from top speed.
+- **While charging a shot:** acceleration and top speed drop to 55%.
+- **Collisions:** skaters are 22 px circles. Skater-on-skater hits are weighted by mass with a bounce of 0.3. Bounce is 0.35 off the boards and 0.2 off the nets.
+- **Visual markers:** each skater has a ring in its team colour (blue for you, red for opponents). The controlled skater's ring has a facing pointer.
+
+### Puck and Possession
+
+- **The puck:** a 7 px circle with ice friction of 60 px/s² and a top speed of 1400 px/s. It moves in sub-steps of at most 4 px, so fast shots can't tunnel through net walls.
+- **Bounces:** it keeps 65% of its speed off the boards and 40% off the net frames.
+- **Carrying:** touching a loose puck takes it, and a carried puck rides in front of the carrier on the facing side.
+- **Stealing:** opponents steal by touching the puck. Teammates can't take it from each other.
+- **Regrab cooldown:** a skater who just released or lost the puck can't take it back for 0.3 s.
+- **Nets:** the puck can only enter a net through the front. A carried puck stops at the net mesh, and nobody can reach a puck through it.
+
+### Shooting
+
+- **Power curve:** shot power depends on how long shoot is held. 100% is 1350 px/s.
+
+| Hold (s) | 0 | 0.55 | 0.8 | 0.88 | 1.1 | 1.18 | 1.4 | 1.45 |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Power | 50% | 80% | 90% | **100%** | 90% | 60% | 20% | whiff |
+
+- **Whiff:** the shot fires by itself at 1.45 s. The puck dribbles off at 120 px/s in a random direction within 90° of facing.
+- **Shot meter:** shown above the carrier and coloured by the power each hold time would give, from red (weak) through yellow to green (100%).
+- **Live shots:** a shot is "live" until it bounces off anything, is stopped, or slows below 300 px/s. Passes are never live.
+- **When a live shot touches a Pokémon,** one outcome is rolled per contact (`shotContact.ts`, a placeholder for future stats and shot speed):
+
+| | Stop (take it) | Deflect (keeps 60% of its speed) | Pass through |
+| --- | --- | --- | --- |
+| Goalie | 60% | 30% | 10% |
+| Other Pokémon | 20% | 30% | 50% |
+
+- **Shot arcs:** an optional limit on shot direction relative to facing. It exists in the code but is off by default, kept for special moves.
+
+### Scoring and Restarts
+
+- **Goals:** a goal counts once the whole puck is past the goal line inside a net. A scoreboard at the top shows YOU and OPP, and "GOAL!" appears in the scoring team's colour.
+- **Walk-back:** after a goal, every Pokémon skates to its formation spot. Player input is ignored and skaters pass through each other. It lasts at least 1.5 s; anyone not home after 5 s is placed on their spot.
+- **Restart:** the puck respawns on the center dot, everyone stays frozen through a 3 – 2 – 1 countdown, then "GO!" and play resumes.
+
+### AI
+
+- **On `main`:** only the testing toggle (T), which makes opponents skate at the puck. Teammates don't move on their own.
+- **Draft brains:** role-based AI is on the unmerged `enemy-ai` branch, with designs in `docs/AI.md`:
+  - **Offense:** Sniper, Playmaker, Selfish, Crasher.
+  - **Defense:** Stay-at-home, Enforcer, Rover, Shadow.
+  - **Goalie:** Positional, Challenger, Sweeper.
+
+### Not Built Yet (vs. sections 3–10)
+
+- **Gameplay:** body checks and poke checks, Pokémon moves and abilities, per-species stats beyond mass, and stamina.
+- **Rules:** penalties, offsides, icing, periods and a game clock.
+- **Meta:** collection, progression, menus and multiplayer.
+- **AI:** teammate AI, and a goalie save mechanic beyond the shot-contact odds.
+
 ---
 
 *Pokémon Hockey | Living design reference | v0.1*

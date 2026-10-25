@@ -19,6 +19,7 @@ import { Skater, type PlayingPosition, type Team } from '../sim/Skater';
 import { clamp, lerpVec, type CircleBody, type Vec2 } from '../sim/geometry';
 import { getShotPower } from '../sim/shotCharge';
 import { CameraController, CAMERA_TUNING } from './CameraController';
+import { PAUSE_KEYS, PAUSE_SCENE_KEY } from './PauseScene';
 import { PUCK_RADIUS } from '../sim/Puck';
 import { CENTER_DOT, RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RINK_WIDTH } from '../sim/rink';
 
@@ -169,6 +170,13 @@ export class HockeyScene extends Phaser.Scene {
   /** Testing overlay (V): the camera's focus point on the ice and its zoom numbers on the HUD. */
   private cameraDebugMarker!: Phaser.GameObjects.Graphics;
   private cameraDebugText!: Phaser.GameObjects.Text;
+  /** Game-loop time (ms) the scene was paused at, to shift timers that run on real time. */
+  private pausedAt = 0;
+  /**
+   * After unpausing mid wind-up, the shot carries on charging straight away as if shoot were still
+   * held, even with the button up. Pressing shoot hands it back to the button, so releasing fires.
+   */
+  private keepChargingAfterResume = false;
 
   constructor() {
     super('HockeyScene');
@@ -181,6 +189,17 @@ export class HockeyScene extends Phaser.Scene {
   }
 
   create(): void {
+    // Restart (from the pause menu) re-runs create on the same instance, so start from scratch.
+    this.skaterSprites.clear();
+    this.hudObjects.clear();
+    this.teammateIcons.clear();
+    this.teammateIconMasks.clear();
+    this.teammateMarkerPoints.clear();
+    this.lastPhase = 'play';
+    this.lastPuckRespawns = 0;
+    this.goFlashUntil = 0;
+    this.keepChargingAfterResume = false;
+
     this.add.image(0, 0, RINK_BACKGROUND_KEY).setOrigin(0, 0);
 
     const startingSpots = assignStartingSpots(LINEUP, OPENING_FACEOFF_TEAM);
@@ -257,6 +276,10 @@ export class HockeyScene extends Phaser.Scene {
     );
     this.updateHelpText();
     this.createScoreboard();
+    PAUSE_KEYS.forEach((key) => keyboard.on(`keydown-${key}`, () => this.pauseGame()));
+    // Scene events outlive a restart, so drop the listener on shutdown or it'd be added twice.
+    this.events.on(Phaser.Scenes.Events.RESUME, this.onResume, this);
+    this.events.once(Phaser.Scenes.Events.SHUTDOWN, () => this.events.off(Phaser.Scenes.Events.RESUME, this.onResume, this));
     this.puckIndicator = this.addToHud(this.add.graphics().setDepth(HUD_DEPTH));
     this.teammateIndicators = this.addToHud(this.add.graphics().setDepth(HUD_DEPTH));
     this.skaterSprites.forEach(({ model }, skater) => {
@@ -269,6 +292,40 @@ export class HockeyScene extends Phaser.Scene {
       }
     });
     this.setUpCameras();
+  }
+
+  /**
+   * Freezes the match: pausing the scene stops its updates (so no simulation steps or player
+   * input), sprite animations, tweens and input handlers, while it keeps drawing its last frame.
+   * The pause menu goes on top and resumes it.
+   */
+  private pauseGame(): void {
+    this.pausedAt = this.game.loop.time;
+    this.scene.pause();
+    this.scene.launch(PAUSE_SCENE_KEY, { gameSceneKey: this.scene.key, details: this.getPauseDetails() });
+  }
+
+  /** What the pause menu says about the frozen match: the score and any shot being wound up. */
+  private getPauseDetails(): string[] {
+    const { score, controlledSkater, puck } = this.engine;
+    const lines = [`${TEAM_NAMES.player} ${score.player} - ${score.opponent} ${TEAM_NAMES.opponent}`];
+    const chargeSeconds = controlledSkater.shotCharge;
+
+    if (chargeSeconds !== undefined) {
+      const power = Math.round(getShotPower(controlledSkater.tuning, chargeSeconds) * 100);
+      lines.push(`Shot wound up: ${power}% power`, `(held ${chargeSeconds.toFixed(2)} s, kept on resume)`);
+    } else {
+      const carrierTeam = puck.carrier?.team;
+      lines.push(carrierTeam === undefined ? 'Loose puck' : carrierTeam === 'player' ? 'You have the puck' : 'They have the puck');
+    }
+
+    return lines;
+  }
+
+  private onResume(): void {
+    // The GO! flash is timed in real time, which kept running during the pause.
+    this.goFlashUntil += this.game.loop.time - this.pausedAt;
+    this.keepChargingAfterResume = this.engine.controlledSkater.shotCharge !== undefined;
   }
 
   /** Marks `object` as part of the HUD: drawn by the fixed HUD camera, not the rink camera. */
@@ -559,7 +616,7 @@ export class HockeyScene extends Phaser.Scene {
         `Space: switch player (without the puck)   C: switch mode (${SWITCH_MODE_LABELS[this.switchMode]})   ` +
         `R: reset puck   T: enemy chases puck (${this.engine.opponentsChasePuck ? 'on' : 'off'})   ` +
         `Z: camera (${this.cameraController.mode})   X: swap camera (${this.cameraController.swapStyle})   ` +
-        'V: camera debug',
+        'V: camera debug   Esc/P: pause',
     );
   }
 
@@ -580,10 +637,17 @@ export class HockeyScene extends Phaser.Scene {
 
   update(_time: number, deltaMs: number): void {
     const pointer = this.input.activePointer;
+    const shootHeld = pointer.leftButtonDown();
+
+    // Ends once the button takes over, or the shot has gone (fired, whiffed or puck lost).
+    if (shootHeld || this.engine.controlledSkater.shotCharge === undefined) {
+      this.keepChargingAfterResume = false;
+    }
+
     const controls: SkaterControls = {
       move: this.readMovement(),
       aim: this.getPointerWorldPosition(),
-      shoot: pointer.leftButtonDown(),
+      shoot: shootHeld || this.keepChargingAfterResume,
       pass: pointer.rightButtonDown(),
     };
 

@@ -107,7 +107,7 @@ Snapshot of what's built on `main` as of 2026-10-24. The numbers are current tun
 
 - **Stack:** TypeScript, Phaser 3 and Vite, as planned.
 - **Simulation:** in `src/sim/`, with no Phaser. It runs on its own: `HockeyEngine`, `Skater`, `Puck`, the rink geometry, the formation and the scoring.
-- **Presentation:** `HockeyScene` handles input, drawing and the HUD.
+- **Presentation:** `HockeyScene` handles input, drawing and the HUD. `PauseScene` is the pause menu, launched over it.
 - **Camera:** `CameraController` (presentation only) places the rink camera each frame from drawn positions, so only part of the 1728×910 rink is on screen. All its numbers are in `CAMERA_TUNING`.
   - **Auto mode (default):** follows the controlled Pokémon leaned 25% toward the puck, on a damped spring. Zoom fits the Pokémon and puck (1.7× close, down to 1.25×), zooms out up to 0.15 more for fast pucks, clamped to 1.15–1.7×, with a deadzone. It zooms out faster than in and nearly freezes while a shot is charging.
   - **Fixed mode:** 1.6× on the controlled Pokémon.
@@ -153,6 +153,11 @@ The current default is the "mouse-facing" movement scheme.
 | Left click | Shoot: hold to charge, release to fire |
 | Right click | Pass toward the cursor (500–800 px/s, firmer for longer passes, full firmness at 700 px) |
 | Space | Switch to the teammate closest to the mouse, only when not carrying the puck. An off-screen teammate counts as being at their edge marker, so point at the marker to pick them |
+| Esc / P | Pause; Esc / P again or the menu's Resume button unpauses |
+
+- **Pause menu (`PauseScene`):** pausing freezes the whole match where it is: no simulation steps, animations, tweens, or game input (including the testing keys). The frozen frame stays visible, dimmed, behind a menu showing the score and any shot being wound up (its power and hold time), with **Resume** and **Restart** buttons.
+  - **Shot wind-up across a pause:** the charge is kept, and it carries on charging the moment play resumes, even with the shoot button up. Pressing shoot hands it back to the button, so releasing fires; left alone, it runs on to a whiff.
+  - **Restart** starts a fresh match (score 0–0); testing-toggle choices like the movement scheme are kept.
 
 - **Who you control:** the player always controls exactly one Pokémon (`controlledByPlayer`). Control moves automatically to whichever teammate gains the puck. You start each faceoff on your center.
 - **Testing-only keys** (to be removed):
@@ -223,7 +228,7 @@ The current default is the "mouse-facing" movement scheme.
 
 - **Gameplay:** body checks and poke checks, Pokémon moves and abilities, per-species stats beyond mass, and stamina.
 - **Rules:** penalties, offsides, icing, periods and a game clock.
-- **Meta:** collection, progression, menus and multiplayer.
+- **Meta:** collection, progression, menus (beyond the pause menu) and multiplayer.
 - **AI:** teammate AI, and a goalie save mechanic beyond the shot-contact odds.
 
 ---

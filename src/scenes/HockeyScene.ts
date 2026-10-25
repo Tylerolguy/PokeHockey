@@ -18,8 +18,9 @@ import { assignStartingSpots, OPENING_FACEOFF_TEAM } from '../sim/formation';
 import { Skater, type PlayingPosition, type Team } from '../sim/Skater';
 import { clamp, lerpVec, type CircleBody, type Vec2 } from '../sim/geometry';
 import { getShotPower } from '../sim/shotCharge';
+import { CameraController, CAMERA_TUNING } from './CameraController';
 import { PUCK_RADIUS } from '../sim/Puck';
-import { RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RINK_WIDTH } from '../sim/rink';
+import { CENTER_DOT, RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RINK_WIDTH } from '../sim/rink';
 
 /**
  * Who plays, for which team, and at which playing position; the first is the one the player
@@ -98,12 +99,11 @@ const TEAM_COLORS: Record<Team, number> = {
 };
 
 /**
- * The camera is zoomed in so only part of the rink is on screen, and follows the controlled
- * skater. The HUD lives on a second, fixed camera so it doesn't zoom or scroll.
+ * The rink camera's center and zoom come from `CameraController` (all its numbers are in
+ * `CAMERA_TUNING`). The HUD lives on a second, fixed camera so it doesn't zoom or scroll.
  */
-const CAMERA_ZOOM = 1.6;
-/** How quickly the camera catches up with the controlled skater (0..1 per frame). */
-const CAMERA_FOLLOW_LERP = 0.12;
+/** Depth of the camera debug overlay's focus marker: above everything on the ice. */
+const CAMERA_DEBUG_DEPTH = 1999;
 /**
  * Off-screen puck marker: a badge with a puck icon and an arrowhead pointing at the puck. How far
  * in from the screen edge it sits, the badge radius, and how far the arrow sticks out (px).
@@ -151,8 +151,10 @@ export class HockeyScene extends Phaser.Scene {
   private readonly hudObjects = new Set<Phaser.GameObjects.GameObject>();
   /** Arrow at the screen edge pointing to the puck when it's off screen. */
   private puckIndicator!: Phaser.GameObjects.Graphics;
-  /** The sprite the rink camera is currently following. */
-  private followedSprite?: Phaser.GameObjects.Sprite;
+  private cameraController!: CameraController;
+  /** Testing overlay (V): the camera's focus point on the ice and its zoom numbers on the HUD. */
+  private cameraDebugMarker!: Phaser.GameObjects.Graphics;
+  private cameraDebugText!: Phaser.GameObjects.Text;
 
   constructor() {
     super('HockeyScene');
@@ -179,6 +181,11 @@ export class HockeyScene extends Phaser.Scene {
       return skater;
     });
     this.engine = new HockeyEngine(skaters);
+    this.cameraController = new CameraController(
+      this.getDrawPosition(this.engine.controlledSkater),
+      { width: RINK_WIDTH, height: RINK_HEIGHT },
+      { width: this.scale.width, height: this.scale.height },
+    );
     this.puckSprite = this.drawPuck();
     // Above the skaters: aiming back across them must still show the line.
     this.aimGraphics = this.add.graphics().setDepth(AIM_DEPTH);
@@ -200,6 +207,20 @@ export class HockeyScene extends Phaser.Scene {
     keyboard.on('keydown-T', () => {
       this.engine.opponentsChasePuck = !this.engine.opponentsChasePuck;
       this.updateHelpText();
+    });
+    // Temporary testing toggles for the camera: auto/fixed mode, and the debug overlay.
+    keyboard.on('keydown-Z', () => {
+      this.cameraController.toggleMode();
+      this.updateHelpText();
+    });
+    keyboard.on('keydown-X', () => {
+      this.cameraController.toggleSwapStyle();
+      this.updateHelpText();
+    });
+    keyboard.on('keydown-V', () => {
+      const visible = !this.cameraDebugText.visible;
+      this.cameraDebugText.setVisible(visible);
+      this.cameraDebugMarker.setVisible(visible);
     });
     keyboard.on('keydown-M', () => {
       const next = (MOVEMENT_SCHEMES.indexOf(this.movementScheme) + 1) % MOVEMENT_SCHEMES.length;
@@ -233,32 +254,70 @@ export class HockeyScene extends Phaser.Scene {
   }
 
   /**
-   * The main camera zooms into the rink and follows the controlled skater; a second camera with no
+   * The main camera shows part of the rink, placed by `CameraController`; a second camera with no
    * zoom or scroll draws only the HUD on top. Each camera ignores the other's objects.
    */
   private setUpCameras(): void {
-    const rinkCamera = this.cameras.main.setBounds(0, 0, RINK_WIDTH, RINK_HEIGHT).setZoom(CAMERA_ZOOM);
-    const hudCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height);
+    this.cameraDebugMarker = this.add.graphics().setDepth(CAMERA_DEBUG_DEPTH).setVisible(false);
+    this.cameraDebugText = this.addToHud(
+      this.add
+        .text(RINK_WIDTH - 16, 16, '', {
+          fontFamily: 'monospace',
+          fontSize: '15px',
+          color: '#ffffff',
+          backgroundColor: '#000000aa',
+          padding: { x: 8, y: 4 },
+        })
+        .setOrigin(1, 0)
+        .setDepth(HUD_DEPTH)
+        .setVisible(false),
+    );
 
+    const rinkCamera = this.cameras.main.setBounds(0, 0, RINK_WIDTH, RINK_HEIGHT);
+    const hudCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height);
     rinkCamera.ignore([...this.hudObjects]);
     hudCamera.ignore(this.children.list.filter((object) => !this.hudObjects.has(object)));
-    this.followControlledSkater(true);
+    this.updateCamera(0);
   }
 
-  /** Points the rink camera at the controlled skater, re-targeting when control switches. */
-  private followControlledSkater(snap = false): void {
-    const sprite = this.skaterSprites.get(this.engine.controlledSkater)?.sprite;
+  /** Feeds the drawn (blended) positions to the camera controller and applies its center and zoom. */
+  private updateCamera(deltaSeconds: number): void {
+    const { controlledSkater, puck, phase } = this.engine;
+    const { center, zoom } = this.cameraController.update({
+      deltaSeconds,
+      controlledId: controlledSkater,
+      controlled: this.getDrawPosition(controlledSkater),
+      puck: this.getDrawPosition(puck),
+      puckSpeed: puck.speed,
+      isChargingShot: controlledSkater.shotCharge !== undefined,
+      isStoppage: phase !== 'play',
+      faceoff: CENTER_DOT,
+    });
 
-    if (!sprite || sprite === this.followedSprite) {
+    this.cameras.main.setZoom(zoom).centerOn(center.x, center.y);
+    this.updateCameraDebug();
+  }
+
+  private updateCameraDebug(): void {
+    if (!this.cameraDebugText.visible) {
       return;
     }
 
-    this.followedSprite = sprite;
-    this.cameras.main.startFollow(sprite, true, CAMERA_FOLLOW_LERP, CAMERA_FOLLOW_LERP);
+    const info = this.cameraController.getDebugInfo();
+    const notes = [info.swapping ? 'swap settling' : '', info.stoppage ? 'stoppage' : ''].filter(Boolean).join(', ');
+    this.cameraDebugText.setText(
+      `camera ${info.mode}, swaps ${info.swapStyle}${notes ? ` (${notes})` : ''}\n` +
+        `zoom ${info.zoom.toFixed(2)} -> target ${info.targetZoom.toFixed(2)}\n` +
+        `spread ${info.spreadZoom.toFixed(2)}  speed -${info.speedZoomOut.toFixed(2)}  ` +
+        `range ${CAMERA_TUNING.minZoom}-${CAMERA_TUNING.maxZoom}`,
+    );
 
-    if (snap) {
-      this.cameras.main.centerOn(sprite.x, sprite.y);
-    }
+    const marker = this.cameraDebugMarker;
+    marker.clear();
+    marker.lineStyle(3, 0xff00ff, 1);
+    marker.strokeCircle(info.focus.x, info.focus.y, 10);
+    marker.lineBetween(info.focus.x - 18, info.focus.y, info.focus.x + 18, info.focus.y);
+    marker.lineBetween(info.focus.x, info.focus.y - 18, info.focus.x, info.focus.y + 18);
   }
 
   /** Where the mouse is on the rink, through the zoomed, scrolling camera (fresh every frame). */
@@ -277,16 +336,17 @@ export class HockeyScene extends Phaser.Scene {
     const graphics = this.puckIndicator;
     graphics.clear();
 
-    const camera = this.cameras.main;
+    const view = this.cameraController.getView();
+    const zoom = this.scale.width / view.width;
     const puck = this.getDrawPosition(this.engine.puck);
 
-    if (camera.worldView.contains(puck.x, puck.y)) {
+    if (puck.x >= view.x && puck.x <= view.x + view.width && puck.y >= view.y && puck.y <= view.y + view.height) {
       return;
     }
 
     const { width, height } = this.scale;
-    const screenX = (puck.x - camera.worldView.x) * camera.zoom;
-    const screenY = (puck.y - camera.worldView.y) * camera.zoom;
+    const screenX = (puck.x - view.x) * zoom;
+    const screenY = (puck.y - view.y) * zoom;
     const dx = screenX - width / 2;
     const dy = screenY - height / 2;
     // Slide along the line from screen center toward the puck until it meets the inset border.
@@ -424,7 +484,9 @@ export class HockeyScene extends Phaser.Scene {
       `${MOVEMENT_SCHEME_HELP[this.movementScheme]}   M: switch controls (${this.movementScheme})   ` +
         'Mouse: aim   Left click: shoot (hold to charge)   Right click: pass\n' +
         `Space: switch player (without the puck)   C: switch mode (${SWITCH_MODE_LABELS[this.switchMode]})   ` +
-        `R: reset puck   T: enemy chases puck (${this.engine.opponentsChasePuck ? 'on' : 'off'})`,
+        `R: reset puck   T: enemy chases puck (${this.engine.opponentsChasePuck ? 'on' : 'off'})   ` +
+        `Z: camera (${this.cameraController.mode})   X: swap camera (${this.cameraController.swapStyle})   ` +
+        'V: camera debug',
     );
   }
 
@@ -455,7 +517,7 @@ export class HockeyScene extends Phaser.Scene {
     this.engine.update(controls, deltaMs / 1000);
     this.drawAim(controls.aim);
     this.syncSprites();
-    this.followControlledSkater();
+    this.updateCamera(deltaMs / 1000);
     this.updatePuckIndicator();
     this.updateScoreboard();
   }

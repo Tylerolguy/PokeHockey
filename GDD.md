@@ -108,7 +108,12 @@ Snapshot of what's built on `main` as of 2026-10-24. The numbers are current tun
 - **Stack:** TypeScript, Phaser 3 and Vite, as planned.
 - **Simulation:** in `src/sim/`, with no Phaser. It runs on its own: `HockeyEngine`, `Skater`, `Puck`, the rink geometry, the formation and the scoring.
 - **Presentation:** `HockeyScene` handles input, drawing and the HUD.
-- **Camera:** zoomed in 1.6× and following the controlled Pokémon, so only part of the 1728×910 rink is on screen at once. The HUD sits on a separate fixed camera. When the puck is off screen, a marker at the screen edge points to it.
+- **Camera:** `CameraController` (presentation only) places the rink camera each frame from drawn positions, so only part of the 1728×910 rink is on screen. All its numbers are in `CAMERA_TUNING`.
+  - **Auto mode (default):** follows the controlled Pokémon leaned 25% toward the puck, on a damped spring. Zoom fits the Pokémon and puck (1.7× close, down to 1.25×), zooms out up to 0.15 more for fast pucks, clamped to 1.15–1.7×, with a deadzone. It zooms out faster than in and nearly freezes while a shot is charging.
+  - **Fixed mode:** 1.6× on the controlled Pokémon.
+  - **Control swaps:** the camera glides over in about 0.45 s, keeping its speed, with the zoom held until it settles. An instant cut is available as an option.
+  - **Stoppages (auto):** goal walk-backs and countdowns frame center ice at 1.25×.
+  - **HUD:** on a separate fixed camera. When the puck is off screen, a marker at the screen edge points to it.
 - **Fixed step:** the simulation updates at 120 Hz. Drawing blends positions between the last two updates, so motion stays smooth at any refresh rate.
 - **Deterministic:** random rolls use a seeded generator, so the same inputs replay the same match. This is groundwork for replays and multiplayer.
 - **Species data:** `src/data/pokemonSpecies.ts`. Each species overrides the default tuning; only mass is set per species so far.
@@ -155,6 +160,9 @@ The current default is the "mouse-facing" movement scheme.
   - **C:** Space switching mode (closest to the mouse by default, or next in lineup).
   - **R:** reset the puck to center.
   - **T:** opponents chase the puck.
+  - **Z:** camera mode (auto or fixed).
+  - **X:** swap camera (smooth glide or instant cut).
+  - **V:** camera debug overlay (focus point and zoom numbers).
 
 ### Skating (`DEFAULT_SKATER_TUNING`)
 

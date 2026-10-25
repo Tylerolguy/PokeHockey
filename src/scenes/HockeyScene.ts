@@ -19,7 +19,7 @@ import { Skater, type PlayingPosition, type Team } from '../sim/Skater';
 import { clamp, lerpVec, type CircleBody, type Vec2 } from '../sim/geometry';
 import { getShotPower } from '../sim/shotCharge';
 import { CameraController, CAMERA_TUNING } from './CameraController';
-import { PAUSE_KEYS, PAUSE_SCENE_KEY } from './PauseScene';
+import { PAUSE_KEYS, PAUSE_SCENE_KEY, type PauseMenuData, type PauseMenuOption } from './PauseScene';
 import { PUCK_RADIUS } from '../sim/Puck';
 import { CENTER_DOT, RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RINK_WIDTH } from '../sim/rink';
 
@@ -27,7 +27,7 @@ import { CENTER_DOT, RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RIN
  * Who plays, for which team, and at which playing position; the first is the one the player
  * controls. Each team needs exactly one center, left/right wing, left/right defense and goalie;
  * where they start comes from their position (see formation.ts). Team and position live here rather than on the species so any
- * species can play anywhere. Teammates don't move yet; opponents only move while T is on.
+ * species can play anywhere. Teammates don't move yet; opponents only move while "Opponents chase puck" is on (pause menu Options).
  */
 const LINEUP: {
   species: PokemonSpecies;
@@ -123,6 +123,11 @@ const SWITCH_MODE_LABELS: Record<SwitchMode, string> = {
   closestToAim: 'closest to mouse',
 };
 const MOVEMENT_SCHEMES: MovementScheme[] = ['mouseFacing', 'directional', 'tank'];
+const MOVEMENT_SCHEME_LABELS: Record<MovementScheme, string> = {
+  mouseFacing: 'mouse-facing',
+  directional: 'directional',
+  tank: 'tank',
+};
 const MOVEMENT_SCHEME_HELP: Record<MovementScheme, string> = {
   mouseFacing: 'WASD: skate (facing the mouse)',
   directional: 'WASD: skate up/left/down/right',
@@ -150,7 +155,7 @@ export class HockeyScene extends Phaser.Scene {
   private lastPuckRespawns = 0;
   private goFlashUntil = 0;
   private movementScheme: MovementScheme = MOVEMENT_SCHEMES[0];
-  /** Testing toggle (C) between the two ways Space picks who to switch to. */
+  /** Testing option (pause menu) between the two ways Space picks who to switch to. */
   private switchMode: SwitchMode = 'closestToAim';
   /** Objects drawn on the fixed HUD camera instead of the zoomed, following rink camera. */
   private readonly hudObjects = new Set<Phaser.GameObjects.GameObject>();
@@ -167,7 +172,7 @@ export class HockeyScene extends Phaser.Scene {
    */
   private teammateMarkerPoints = new Map<Skater, Vec2>();
   private cameraController!: CameraController;
-  /** Testing overlay (V): the camera's focus point on the ice and its zoom numbers on the HUD. */
+  /** Testing overlay (pause menu option): the camera's focus point on the ice and its zoom numbers on the HUD. */
   private cameraDebugMarker!: Phaser.GameObjects.Graphics;
   private cameraDebugText!: Phaser.GameObjects.Text;
   /** Game-loop time (ms) the scene was paused at, to shift timers that run on real time. */
@@ -233,34 +238,6 @@ export class HockeyScene extends Phaser.Scene {
     keyboard.on('keydown-SPACE', () => {
       this.engine.switchControlledSkater(this.switchMode, this.getPointerWorldPosition(), this.teammateMarkerPoints);
     });
-    keyboard.on('keydown-C', () => {
-      this.switchMode = this.switchMode === 'nextInList' ? 'closestToAim' : 'nextInList';
-      this.updateHelpText();
-    });
-    // Temporary testing toggle.
-    keyboard.on('keydown-T', () => {
-      this.engine.opponentsChasePuck = !this.engine.opponentsChasePuck;
-      this.updateHelpText();
-    });
-    // Temporary testing toggles for the camera: auto/fixed mode, and the debug overlay.
-    keyboard.on('keydown-Z', () => {
-      this.cameraController.toggleMode();
-      this.updateHelpText();
-    });
-    keyboard.on('keydown-X', () => {
-      this.cameraController.toggleSwapStyle();
-      this.updateHelpText();
-    });
-    keyboard.on('keydown-V', () => {
-      const visible = !this.cameraDebugText.visible;
-      this.cameraDebugText.setVisible(visible);
-      this.cameraDebugMarker.setVisible(visible);
-    });
-    keyboard.on('keydown-M', () => {
-      const next = (MOVEMENT_SCHEMES.indexOf(this.movementScheme) + 1) % MOVEMENT_SCHEMES.length;
-      this.movementScheme = MOVEMENT_SCHEMES[next];
-      this.updateHelpText();
-    });
 
     this.helpText = this.addToHud(
       this.add
@@ -302,7 +279,65 @@ export class HockeyScene extends Phaser.Scene {
   private pauseGame(): void {
     this.pausedAt = this.game.loop.time;
     this.scene.pause();
-    this.scene.launch(PAUSE_SCENE_KEY, { gameSceneKey: this.scene.key, details: this.getPauseDetails() });
+    const menuData: PauseMenuData = {
+      gameSceneKey: this.scene.key,
+      details: this.getPauseDetails(),
+      options: this.getPauseOptions(),
+    };
+    this.scene.launch(PAUSE_SCENE_KEY, menuData);
+  }
+
+  /**
+   * The settings in the pause menu's Options submenu. These are temporary testing toggles (they
+   * used to be the M, C, T, Z, X and V keys) for comparing ways the game could work.
+   */
+  private getPauseOptions(): PauseMenuOption[] {
+    const onOff = (on: boolean) => (on ? 'on' : 'off');
+
+    return [
+      {
+        label: 'Movement controls',
+        value: () => MOVEMENT_SCHEME_LABELS[this.movementScheme],
+        change: () => {
+          const next = (MOVEMENT_SCHEMES.indexOf(this.movementScheme) + 1) % MOVEMENT_SCHEMES.length;
+          this.movementScheme = MOVEMENT_SCHEMES[next];
+          this.updateHelpText();
+        },
+      },
+      {
+        label: 'Space switches to',
+        value: () => SWITCH_MODE_LABELS[this.switchMode],
+        change: () => {
+          this.switchMode = this.switchMode === 'nextInList' ? 'closestToAim' : 'nextInList';
+        },
+      },
+      {
+        label: 'Opponents chase puck',
+        value: () => onOff(this.engine.opponentsChasePuck),
+        change: () => {
+          this.engine.opponentsChasePuck = !this.engine.opponentsChasePuck;
+        },
+      },
+      {
+        label: 'Camera',
+        value: () => this.cameraController.mode,
+        change: () => this.cameraController.toggleMode(),
+      },
+      {
+        label: 'Camera on player swap',
+        value: () => this.cameraController.swapStyle,
+        change: () => this.cameraController.toggleSwapStyle(),
+      },
+      {
+        label: 'Camera debug overlay',
+        value: () => onOff(this.cameraDebugText.visible),
+        change: () => {
+          const visible = !this.cameraDebugText.visible;
+          this.cameraDebugText.setVisible(visible);
+          this.cameraDebugMarker.setVisible(visible);
+        },
+      },
+    ];
   }
 
   /** What the pause menu says about the frozen match: the score and any shot being wound up. */
@@ -611,12 +646,10 @@ export class HockeyScene extends Phaser.Scene {
 
   private updateHelpText(): void {
     this.helpText.setText(
-      `${MOVEMENT_SCHEME_HELP[this.movementScheme]}   M: switch controls (${this.movementScheme})   ` +
+      `${MOVEMENT_SCHEME_HELP[this.movementScheme]}   ` +
         'Mouse: aim   Left click: shoot (hold to charge)   Right click: pass\n' +
-        `Space: switch player (without the puck)   C: switch mode (${SWITCH_MODE_LABELS[this.switchMode]})   ` +
-        `R: reset puck   T: enemy chases puck (${this.engine.opponentsChasePuck ? 'on' : 'off'})   ` +
-        `Z: camera (${this.cameraController.mode})   X: swap camera (${this.cameraController.swapStyle})   ` +
-        'V: camera debug   Esc/P: pause',
+        'Space: switch player (without the puck)   R: reset puck (testing)   ' +
+        'Esc/P: pause (Options: controls, camera)',
     );
   }
 

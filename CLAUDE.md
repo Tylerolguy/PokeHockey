@@ -20,7 +20,7 @@
 
 - Match the surrounding style: doc comments on exported things and non-obvious logic, descriptive names, no abbreviations.
 - Tunable numbers live in one place per system (`DEFAULT_SKATER_TUNING`, `CAMERA_TUNING`, constants at the top of each file) with a comment saying what they do and their units.
-- Keyboard testing toggles are temporary and marked as such in code and in the on-screen help text: M (movement scheme), C (Space switching mode), R (reset puck), T (opponents chase puck), Z (camera mode), X (swap camera style), V (camera debug).
+- Testing toggles are temporary and marked as such in code. Settings live in the pause menu's Options submenu (`getPauseOptions` in `HockeyScene`): movement scheme, Space switching mode, opponents chase puck, camera mode, swap camera style, camera debug. Add new ones there, not as keys. The only testing key left is R (reset puck). Esc / P pauses.
 - Prefer making behaviour switchable (a mode or toggle) when the user wants to compare options.
 
 ## Workflow

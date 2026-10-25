@@ -155,19 +155,19 @@ The current default is the "mouse-facing" movement scheme.
 | Space | Switch to the teammate closest to the mouse, only when not carrying the puck. An off-screen teammate counts as being at their edge marker, so point at the marker to pick them |
 | Esc / P | Pause; Esc / P again or the menu's Resume button unpauses |
 
-- **Pause menu (`PauseScene`):** pausing freezes the whole match where it is: no simulation steps, animations, tweens, or game input (including the testing keys). The frozen frame stays visible, dimmed, behind a menu showing the score and any shot being wound up (its power and hold time), with **Resume** and **Restart** buttons.
+- **Pause menu (`PauseScene`):** pausing freezes the whole match where it is: no simulation steps, animations, tweens, or game input (including the testing keys). The frozen frame stays visible, dimmed, behind a menu showing the score and any shot being wound up (its power and hold time), with **Resume**, **Options** and **Restart** buttons. Options holds the testing settings listed above; Esc / P backs out of it to the main menu.
   - **Shot wind-up across a pause:** the charge is kept, and it carries on charging the moment play resumes, even with the shoot button up. Pressing shoot hands it back to the button, so releasing fires; left alone, it runs on to a whiff.
   - **Restart** starts a fresh match (score 0–0); testing-toggle choices like the movement scheme are kept.
 
 - **Who you control:** the player always controls exactly one Pokémon (`controlledByPlayer`). Control moves automatically to whichever teammate gains the puck. You start each faceoff on your center.
-- **Testing-only keys** (to be removed):
-  - **M:** cycle movement schemes (mouse-facing, directional, tank).
-  - **C:** Space switching mode (closest to the mouse by default, or next in lineup).
-  - **R:** reset the puck to center.
-  - **T:** opponents chase the puck.
-  - **Z:** camera mode (auto or fixed).
-  - **X:** swap camera (smooth glide or instant cut).
-  - **V:** camera debug overlay (focus point and zoom numbers).
+- **Testing-only key** (to be removed): **R** resets the puck to center.
+- **Testing options** (pause menu → Options; click one to step to its next choice; to be removed or turned into real settings):
+  - **Movement controls:** mouse-facing, directional or tank.
+  - **Space switches to:** the teammate closest to the mouse (default), or the next in the lineup.
+  - **Opponents chase puck:** on or off.
+  - **Camera:** auto or fixed.
+  - **Camera on player swap:** smooth glide or instant cut.
+  - **Camera debug overlay:** focus point and zoom numbers.
 
 ### Skating (`DEFAULT_SKATER_TUNING`)
 
@@ -218,7 +218,7 @@ The current default is the "mouse-facing" movement scheme.
 
 ### AI
 
-- **On `main`:** only the testing toggle (T), which makes opponents skate at the puck. Teammates don't move on their own.
+- **On `main`:** only the "Opponents chase puck" testing option, which makes opponents skate at the puck. Teammates don't move on their own.
 - **Draft brains:** role-based AI is on the unmerged `enemy-ai` branch, with designs in `docs/AI.md`:
   - **Offense:** Sniper, Playmaker, Selfish, Crasher.
   - **Defense:** Stay-at-home, Enforcer, Rover, Shadow.

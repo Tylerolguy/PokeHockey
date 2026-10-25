@@ -146,7 +146,7 @@ export class HockeyScene extends Phaser.Scene {
   private goFlashUntil = 0;
   private movementScheme: MovementScheme = MOVEMENT_SCHEMES[0];
   /** Testing toggle (C) between the two ways Space picks who to switch to. */
-  private switchMode: SwitchMode = 'nextInList';
+  private switchMode: SwitchMode = 'closestToAim';
   /** Objects drawn on the fixed HUD camera instead of the zoomed, following rink camera. */
   private readonly hudObjects = new Set<Phaser.GameObjects.GameObject>();
   /** Arrow at the screen edge pointing to the puck when it's off screen. */

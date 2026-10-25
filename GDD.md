@@ -147,12 +147,12 @@ The current default is the "mouse-facing" movement scheme.
 | Mouse | Facing and aim; the skater turns toward the cursor at 7 rad/s |
 | Left click | Shoot: hold to charge, release to fire |
 | Right click | Pass toward the cursor (500–800 px/s, firmer for longer passes, full firmness at 700 px) |
-| Space | Switch to another teammate, only when not carrying the puck |
+| Space | Switch to the teammate closest to the mouse, only when not carrying the puck |
 
 - **Who you control:** the player always controls exactly one Pokémon (`controlledByPlayer`). Control moves automatically to whichever teammate gains the puck. You start each faceoff on your center.
 - **Testing-only keys** (to be removed):
   - **M:** cycle movement schemes (mouse-facing, directional, tank).
-  - **C:** Space switching mode (next in lineup, or closest to the mouse).
+  - **C:** Space switching mode (closest to the mouse by default, or next in lineup).
   - **R:** reset the puck to center.
   - **T:** opponents chase the puck.
 

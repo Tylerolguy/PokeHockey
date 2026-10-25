@@ -118,10 +118,12 @@ export class HockeyEngine {
 
   /**
    * Switches the player to another skater on their team, unless the one they control has the
-   * puck or play is stopped after a goal. `aim` is the cursor, used by 'closestToAim'. Returns
-   * whether control changed.
+   * puck or play is stopped after a goal. `aim` is the cursor, used by 'closestToAim'.
+   * `pickPositions` optionally says where a skater counts as being for that (e.g. the on-screen
+   * marker of a teammate who's off screen); others use their real position. Returns whether
+   * control changed.
    */
-  switchControlledSkater(mode: SwitchMode, aim: Vec2): boolean {
+  switchControlledSkater(mode: SwitchMode, aim: Vec2, pickPositions?: Map<Skater, Vec2>): boolean {
     const current = this.controlledSkater;
 
     if (this.phase !== 'play' || this.puck.carrier === current) {
@@ -129,15 +131,15 @@ export class HockeyEngine {
     }
 
     const team = this.skaters.filter((skater) => skater.team === current.team);
+    const distanceToAim = (skater: Skater) => {
+      const point = pickPositions?.get(skater) ?? skater.position;
+
+      return Math.hypot(point.x - aim.x, point.y - aim.y);
+    };
     const next =
       mode === 'nextInList'
         ? team[(team.indexOf(current) + 1) % team.length]
-        : team
-            .filter((skater) => skater !== current)
-            .sort(
-              (a, b) =>
-                Math.hypot(a.position.x - aim.x, a.position.y - aim.y) - Math.hypot(b.position.x - aim.x, b.position.y - aim.y),
-            )[0];
+        : team.filter((skater) => skater !== current).sort((a, b) => distanceToAim(a) - distanceToAim(b))[0];
 
     if (!next || next === current) {
       return false;

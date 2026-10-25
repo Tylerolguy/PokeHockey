@@ -113,7 +113,7 @@ Snapshot of what's built on `main` as of 2026-10-24. The numbers are current tun
   - **Fixed mode:** 1.6× on the controlled Pokémon.
   - **Control swaps:** the camera glides over in about 0.45 s, keeping its speed, with the zoom held until it settles. An instant cut is available as an option.
   - **Stoppages (auto):** goal walk-backs and countdowns frame center ice at 1.25×.
-  - **HUD:** on a separate fixed camera. When the puck is off screen, a marker at the screen edge points to it.
+  - **HUD:** on a separate fixed camera. When the puck is off screen, a marker at the screen edge points to it. Teammates who are off screen get a blue marker with their Pokémon icon.
 - **Fixed step:** the simulation updates at 120 Hz. Drawing blends positions between the last two updates, so motion stays smooth at any refresh rate.
 - **Deterministic:** random rolls use a seeded generator, so the same inputs replay the same match. This is groundwork for replays and multiplayer.
 - **Species data:** `src/data/pokemonSpecies.ts`. Each species overrides the default tuning; only mass is set per species so far.
@@ -152,7 +152,7 @@ The current default is the "mouse-facing" movement scheme.
 | Mouse | Facing and aim; the skater turns toward the cursor at 7 rad/s |
 | Left click | Shoot: hold to charge, release to fire |
 | Right click | Pass toward the cursor (500–800 px/s, firmer for longer passes, full firmness at 700 px) |
-| Space | Switch to the teammate closest to the mouse, only when not carrying the puck |
+| Space | Switch to the teammate closest to the mouse, only when not carrying the puck. An off-screen teammate counts as being at their edge marker, so point at the marker to pick them |
 
 - **Who you control:** the player always controls exactly one Pokémon (`controlledByPlayer`). Control moves automatically to whichever teammate gains the puck. You start each faceoff on your center.
 - **Testing-only keys** (to be removed):

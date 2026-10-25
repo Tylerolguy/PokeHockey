@@ -111,6 +111,10 @@ const CAMERA_DEBUG_DEPTH = 1999;
 const PUCK_INDICATOR_INSET = 48;
 const PUCK_INDICATOR_RADIUS = 22;
 const PUCK_INDICATOR_ARROW_LENGTH = 16;
+/** Off-screen teammate markers: a team-colored badge with the Pokemon's icon (icons are 40 px). */
+const TEAMMATE_INDICATOR_RADIUS = 24;
+/** All Pokemon icons packed in one atlas; frame names match species model names. */
+const ICON_ATLAS_KEY = 'pokemon-icons';
 
 type MovementScheme = MovementControls['scheme'];
 const SWITCH_MODE_LABELS: Record<SwitchMode, string> = {
@@ -151,6 +155,16 @@ export class HockeyScene extends Phaser.Scene {
   private readonly hudObjects = new Set<Phaser.GameObjects.GameObject>();
   /** Arrow at the screen edge pointing to the puck when it's off screen. */
   private puckIndicator!: Phaser.GameObjects.Graphics;
+  /** Badges at the screen edge pointing to teammates who are off screen, each with their icon. */
+  private teammateIndicators!: Phaser.GameObjects.Graphics;
+  private teammateIcons = new Map<Skater, Phaser.GameObjects.Image>();
+  /** Circles that clip each teammate icon (the icon art has a square background) inside its badge. */
+  private teammateIconMasks = new Map<Skater, Phaser.GameObjects.Graphics>();
+  /**
+   * Where each off-screen teammate's marker sits on the rink this frame. Space's "closest to the
+   * mouse" uses these, so pointing at a marker picks that teammate.
+   */
+  private teammateMarkerPoints = new Map<Skater, Vec2>();
   private cameraController!: CameraController;
   /** Testing overlay (V): the camera's focus point on the ice and its zoom numbers on the HUD. */
   private cameraDebugMarker!: Phaser.GameObjects.Graphics;
@@ -162,6 +176,7 @@ export class HockeyScene extends Phaser.Scene {
 
   preload(): void {
     this.load.image(RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH);
+    this.load.atlas(ICON_ATLAS_KEY, 'assets/pokemon-icons.png', 'assets/pokemon-icons.json');
     new Set(LINEUP.map(({ species }) => species.model)).forEach((model) => loadPokemonModel(this, model));
   }
 
@@ -197,7 +212,7 @@ export class HockeyScene extends Phaser.Scene {
     keyboard.on('keydown-R', () => this.engine.resetPuck());
     keyboard.addCapture('SPACE');
     keyboard.on('keydown-SPACE', () => {
-      this.engine.switchControlledSkater(this.switchMode, this.getPointerWorldPosition());
+      this.engine.switchControlledSkater(this.switchMode, this.getPointerWorldPosition(), this.teammateMarkerPoints);
     });
     keyboard.on('keydown-C', () => {
       this.switchMode = this.switchMode === 'nextInList' ? 'closestToAim' : 'nextInList';
@@ -243,6 +258,16 @@ export class HockeyScene extends Phaser.Scene {
     this.updateHelpText();
     this.createScoreboard();
     this.puckIndicator = this.addToHud(this.add.graphics().setDepth(HUD_DEPTH));
+    this.teammateIndicators = this.addToHud(this.add.graphics().setDepth(HUD_DEPTH));
+    this.skaterSprites.forEach(({ model }, skater) => {
+      if (skater.team === 'player') {
+        const icon = this.add.image(0, 0, ICON_ATLAS_KEY, model).setDepth(HUD_DEPTH).setVisible(false);
+        const mask = this.make.graphics({}, false).fillStyle(0xffffff).fillCircle(0, 0, TEAMMATE_INDICATOR_RADIUS - 2);
+        icon.setMask(mask.createGeometryMask());
+        this.teammateIcons.set(skater, this.addToHud(icon));
+        this.teammateIconMasks.set(skater, mask);
+      }
+    });
     this.setUpCameras();
   }
 
@@ -328,53 +353,101 @@ export class HockeyScene extends Phaser.Scene {
     return { x: point.x, y: point.y };
   }
 
-  /**
-   * When the puck is off screen, draws an arrow on the HUD at the screen edge pointing toward it,
-   * with a puck icon so it reads as "puck this way".
-   */
+  /** When the puck is off screen, a badge at the screen edge with a puck icon points to it. */
   private updatePuckIndicator(): void {
     const graphics = this.puckIndicator;
     graphics.clear();
 
-    const view = this.cameraController.getView();
-    const zoom = this.scale.width / view.width;
-    const puck = this.getDrawPosition(this.engine.puck);
+    const marker = this.getEdgeMarker(this.getDrawPosition(this.engine.puck), PUCK_INDICATOR_INSET);
 
-    if (puck.x >= view.x && puck.x <= view.x + view.width && puck.y >= view.y && puck.y <= view.y + view.height) {
+    if (!marker) {
       return;
     }
 
+    this.drawEdgeBadge(graphics, marker, PUCK_INDICATOR_RADIUS, 0xffffff);
+    graphics.fillStyle(0x15171c, 1);
+    graphics.fillCircle(marker.x, marker.y, PUCK_RADIUS * 1.6);
+    graphics.lineStyle(2, 0x5a6070, 1);
+    graphics.strokeCircle(marker.x, marker.y, PUCK_RADIUS * 1.6 - 2);
+  }
+
+  /**
+   * Teammates who are off screen (never the controlled one, who's always on screen) get a badge in
+   * the team color with their icon, pointing at them. Their marker's spot is remembered so Space can
+   * pick a teammate by pointing at it.
+   */
+  private updateTeammateIndicators(): void {
+    const graphics = this.teammateIndicators;
+    graphics.clear();
+    this.teammateMarkerPoints.clear();
+
+    const view = this.cameraController.getView();
+    const zoom = this.scale.width / view.width;
+
+    this.teammateIcons.forEach((icon, skater) => {
+      const marker =
+        skater === this.engine.controlledSkater
+          ? undefined
+          : this.getEdgeMarker(this.getDrawPosition(skater), PUCK_INDICATOR_INSET);
+
+      if (!marker) {
+        icon.setVisible(false);
+        return;
+      }
+
+      this.drawEdgeBadge(graphics, marker, TEAMMATE_INDICATOR_RADIUS, TEAM_COLORS.player);
+      icon.setPosition(marker.x, marker.y).setVisible(true);
+      this.teammateIconMasks.get(skater)?.setPosition(marker.x, marker.y);
+      this.teammateMarkerPoints.set(skater, { x: view.x + marker.x / zoom, y: view.y + marker.y / zoom });
+    });
+  }
+
+  /**
+   * Where to put a screen-edge marker for something at `world` that's off screen: on the line from
+   * the screen center toward it, `inset` px in from the edge. Undefined when it's on screen.
+   */
+  private getEdgeMarker(world: Vec2, inset: number): { x: number; y: number; angle: number } | undefined {
+    const view = this.cameraController.getView();
+
+    if (world.x >= view.x && world.x <= view.x + view.width && world.y >= view.y && world.y <= view.y + view.height) {
+      return undefined;
+    }
+
     const { width, height } = this.scale;
-    const screenX = (puck.x - view.x) * zoom;
-    const screenY = (puck.y - view.y) * zoom;
-    const dx = screenX - width / 2;
-    const dy = screenY - height / 2;
-    // Slide along the line from screen center toward the puck until it meets the inset border.
+    const zoom = width / view.width;
+    const dx = (world.x - view.x) * zoom - width / 2;
+    const dy = (world.y - view.y) * zoom - height / 2;
+    // Slide along the line from screen center toward the target until it meets the inset border.
     const reach = Math.min(
-      dx !== 0 ? (width / 2 - PUCK_INDICATOR_INSET) / Math.abs(dx) : Infinity,
-      dy !== 0 ? (height / 2 - PUCK_INDICATOR_INSET) / Math.abs(dy) : Infinity,
+      dx !== 0 ? (width / 2 - inset) / Math.abs(dx) : Infinity,
+      dy !== 0 ? (height / 2 - inset) / Math.abs(dy) : Infinity,
     );
-    const x = width / 2 + dx * reach;
-    const y = height / 2 + dy * reach;
-    const angle = Math.atan2(dy, dx);
+
+    return { x: width / 2 + dx * reach, y: height / 2 + dy * reach, angle: Math.atan2(dy, dx) };
+  }
+
+  /** A dark badge with a colored outline and an arrowhead pointing along `marker.angle`. */
+  private drawEdgeBadge(
+    graphics: Phaser.GameObjects.Graphics,
+    marker: { x: number; y: number; angle: number },
+    radius: number,
+    color: number,
+  ): void {
+    const { x, y, angle } = marker;
     const along = (distance: number, sideways = 0) => ({
       x: x + Math.cos(angle) * distance - Math.sin(angle) * sideways,
       y: y + Math.sin(angle) * distance + Math.cos(angle) * sideways,
     });
-    const tip = along(PUCK_INDICATOR_RADIUS + PUCK_INDICATOR_ARROW_LENGTH);
-    const baseLeft = along(PUCK_INDICATOR_RADIUS - 4, -PUCK_INDICATOR_RADIUS * 0.6);
-    const baseRight = along(PUCK_INDICATOR_RADIUS - 4, PUCK_INDICATOR_RADIUS * 0.6);
+    const tip = along(radius + PUCK_INDICATOR_ARROW_LENGTH);
+    const baseLeft = along(radius - 4, -radius * 0.6);
+    const baseRight = along(radius - 4, radius * 0.6);
 
-    graphics.fillStyle(0xffffff, 0.95);
+    graphics.fillStyle(color, 0.95);
     graphics.fillTriangle(tip.x, tip.y, baseLeft.x, baseLeft.y, baseRight.x, baseRight.y);
     graphics.fillStyle(0x0b1220, 0.85);
-    graphics.fillCircle(x, y, PUCK_INDICATOR_RADIUS);
-    graphics.lineStyle(3, 0xffffff, 0.95);
-    graphics.strokeCircle(x, y, PUCK_INDICATOR_RADIUS);
-    graphics.fillStyle(0x15171c, 1);
-    graphics.fillCircle(x, y, PUCK_RADIUS * 1.6);
-    graphics.lineStyle(2, 0x5a6070, 1);
-    graphics.strokeCircle(x, y, PUCK_RADIUS * 1.6 - 2);
+    graphics.fillCircle(x, y, radius);
+    graphics.lineStyle(3, color, 0.95);
+    graphics.strokeCircle(x, y, radius);
   }
 
   private createScoreboard(): void {
@@ -519,6 +592,7 @@ export class HockeyScene extends Phaser.Scene {
     this.syncSprites();
     this.updateCamera(deltaMs / 1000);
     this.updatePuckIndicator();
+    this.updateTeammateIndicators();
     this.updateScoreboard();
   }
 

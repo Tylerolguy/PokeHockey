@@ -13,7 +13,7 @@ import { createRandom } from './random';
 import { getScoringTeam } from './scoring';
 import { getShotSpeed, isWhiff } from './shotCharge';
 import { getShotContactChances, rollShotContact } from './shotContact';
-import { Skater, type Team } from './Skater';
+import { CHECK_STYLES, Skater, type CheckStyle, type Team } from './Skater';
 import { CENTER_DOT, FACEOFF_DOT_POSITIONS, getNearestFaceoffDot, type FaceoffDot } from './rink';
 import {
   canTransition,
@@ -69,6 +69,11 @@ export interface SkaterControls {
   shoot: boolean;
   /** Pass button held: fires on press. */
   pass: boolean;
+  /**
+   * Check button held: a press without the puck starts a check (a short dash toward `aim`). The
+   * player's check is the same button as shoot; which one it does depends on having the puck.
+   */
+  check?: boolean;
 }
 
 /** How Space picks the next skater to control: lineup order, or nearest the cursor. */
@@ -103,6 +108,10 @@ export class HockeyEngine {
   private wasPassHeld = false;
   /** Shoot held last step, so the faceoff draw reacts to presses rather than holds. */
   private wasShootHeld = false;
+  /** Check held last step, so a check starts on the press, not while held. */
+  private wasCheckHeld = false;
+  /** Testing option: how a check's dash handles (see `CheckStyle`). */
+  public checkStyle: CheckStyle = CHECK_STYLES[0];
   /** The current or last faceoff's draw: who won it and where the puck went (see faceoff.ts). */
   public faceoffDraw?: FaceoffDraw;
   /**
@@ -276,6 +285,15 @@ export class HockeyEngine {
     const arcs = skater.tuning.shotArcs;
 
     return arcs ? clampDirectionToArcs(direction, skater.facing, arcs) : direction;
+  }
+
+  /** Unit vector from `skater` toward `aim`, or the way it faces if the cursor is on it. */
+  getDirectionTo(skater: Skater, aim: Vec2): Vec2 {
+    const dx = aim.x - skater.position.x;
+    const dy = aim.y - skater.position.y;
+    const length = Math.hypot(dx, dy);
+
+    return length >= 1 ? { x: dx / length, y: dy / length } : { ...skater.facing };
   }
 
   /**
@@ -500,6 +518,7 @@ export class HockeyEngine {
       skater.velocity.y = 0;
       skater.setFacing(spot.facing.x, spot.facing.y);
       skater.shotCharge = undefined;
+      skater.cancelCheck();
     });
     // The player takes the faceoff with their center.
     const playerCenter = this.skaters.find((skater) => skater.team === 'player' && skater.playingPosition === 'center');
@@ -515,8 +534,9 @@ export class HockeyEngine {
       { x: 1, y: 0 },
       this.random,
     );
-    // A button already held doesn't count; the draw needs a fresh press.
+    // A button already held doesn't count; the draw, and the first check after it, need a fresh press.
     this.wasShootHeld = true;
+    this.wasCheckHeld = true;
     this.setPhase('faceoff');
   }
 
@@ -619,9 +639,16 @@ export class HockeyEngine {
   private handleStickControls(skater: Skater, controls: SkaterControls, deltaSeconds: number): void {
     const passPressed = controls.pass && !this.wasPassHeld;
     this.wasPassHeld = controls.pass;
+    const checkPressed = Boolean(controls.check) && !this.wasCheckHeld;
+    this.wasCheckHeld = Boolean(controls.check);
 
     if (this.puck.carrier !== skater) {
       skater.shotCharge = undefined;
+
+      if (checkPressed) {
+        skater.startCheck(this.getDirectionTo(skater, controls.aim), this.checkStyle);
+      }
+
       return;
     }
 

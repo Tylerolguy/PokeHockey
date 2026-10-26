@@ -59,6 +59,34 @@ export interface SkaterTuning {
    * green zone the player has to stop the bar in (see faceoff.ts). A future stat.
    */
   faceoffSkill: number;
+  /** px/s of a check's dash: a short burst well over `maxSpeed`. A future checking stat. */
+  checkDashSpeed: number;
+  /** How long (s) the dash itself lasts, at `checkDashSpeed`, before the speed bleeds back off. */
+  checkDashSeconds: number;
+  /** After the dash, how long (s) the extra speed takes to bleed back down to `maxSpeed`. */
+  checkRecoverySeconds: number;
+  /** Time (s) from the start of one check until the next can start. */
+  checkCooldownSeconds: number;
+  /** px/s² a "carve" style dash speeds up at along the facing (the "commit" style is instant). */
+  checkCarveAcceleration: number;
+}
+
+/**
+ * How a check's dash handles, to compare (pause menu → Options):
+ * - `commit`: snaps to full dash speed toward where you clicked and holds that line until it ends.
+ * - `carve`: builds to dash speed in a blink along the skater's facing, which keeps turning toward
+ *   the mouse, so the dash can be steered.
+ * Either way, movement keys are ignored during the dash itself.
+ */
+export type CheckStyle = 'commit' | 'carve';
+export const CHECK_STYLES: CheckStyle[] = ['commit', 'carve'];
+
+/** A check in progress: the dash, then the recovery while the extra speed bleeds off. */
+interface CheckState {
+  style: CheckStyle;
+  /** Unit direction the dash was aimed at when it started. */
+  direction: Vec2;
+  elapsed: number;
 }
 
 /** One point on a shot power curve: holding shoot for `seconds` gives `power` (0..1). */
@@ -96,6 +124,11 @@ export const DEFAULT_SKATER_TUNING: SkaterTuning = {
   passMinSpeed: 500,
   passMaxSpeed: 800,
   faceoffSkill: 0.5,
+  checkDashSpeed: 720,
+  checkDashSeconds: 0.11,
+  checkRecoverySeconds: 0.3,
+  checkCooldownSeconds: 0.9,
+  checkCarveAcceleration: 9000,
 };
 
 /** Which side a skater plays for. */
@@ -137,6 +170,10 @@ export class Skater implements CircleBody {
    * one set; use `HockeyEngine.controlledSkater` to find it.
    */
   public controlledByPlayer = false;
+  /** The check in progress, if any (see `startCheck`). */
+  private check?: CheckState;
+  /** Seconds until another check can start. */
+  private checkCooldown = 0;
 
   constructor(
     start: Vec2,
@@ -158,12 +195,51 @@ export class Skater implements CircleBody {
     return Math.hypot(this.velocity.x, this.velocity.y);
   }
 
+  /** True during a check's dash itself (not the recovery after it). */
+  get isDashing(): boolean {
+    return this.check !== undefined && this.check.elapsed < this.tuning.checkDashSeconds;
+  }
+
+  /** True from the start of a check until its extra speed has bled off. */
+  get isChecking(): boolean {
+    return this.check !== undefined;
+  }
+
+  /**
+   * Starts a check: a short dash along unit vector `direction`, handled per `style`. The skater
+   * turns to face it. Refused (returns false) while one is going or cooling down.
+   */
+  startCheck(direction: Vec2, style: CheckStyle): boolean {
+    if (this.check || this.checkCooldown > 0) {
+      return false;
+    }
+
+    this.check = { style, direction: { ...direction }, elapsed: 0 };
+    this.checkCooldown = this.tuning.checkCooldownSeconds;
+    this.setFacing(direction.x, direction.y);
+
+    if (style === 'commit') {
+      this.velocity.x = direction.x * this.tuning.checkDashSpeed;
+      this.velocity.y = direction.y * this.tuning.checkDashSpeed;
+    }
+
+    return true;
+  }
+
   /**
    * `input` is the direction to accelerate in, each axis -1..1; facing is not changed.
    * `moveScale` lowers acceleration and top speed (skating backward, turning); winding up a shot
-   * lowers them further.
+   * lowers them further. During a check's dash, input is ignored and the dash drives the skater.
    */
   update(input: Vec2, deltaSeconds: number, moveScale = 1): void {
+    this.checkCooldown = Math.max(0, this.checkCooldown - deltaSeconds);
+    this.advanceCheck(deltaSeconds);
+
+    if (this.isDashing) {
+      this.stepDash(deltaSeconds);
+      return;
+    }
+
     const inputLength = Math.hypot(input.x, input.y);
     const speedBefore = this.speed;
     if (this.shotCharge !== undefined) {
@@ -185,11 +261,69 @@ export class Skater implements CircleBody {
     // A lowered top speed bleeds speed off gradually instead of stopping dead.
     const reducedMaxSpeed = this.tuning.maxSpeed * moveScale;
     const bleedingSpeed = speedBefore - this.tuning.glideFriction * deltaSeconds;
-    this.limitSpeed(Math.max(reducedMaxSpeed, Math.min(this.tuning.maxSpeed, bleedingSpeed)));
+    this.limitSpeed(Math.max(reducedMaxSpeed, Math.min(this.getSpeedCap(deltaSeconds, speedBefore), bleedingSpeed)));
 
     this.position.x += this.velocity.x * deltaSeconds;
     this.position.y += this.velocity.y * deltaSeconds;
     this.collideWithRink();
+  }
+
+  /**
+   * Top speed this step: `maxSpeed`, except while recovering from a check, when the dash's extra
+   * speed bleeds off evenly over `checkRecoverySeconds` instead of being cut at once.
+   */
+  private getSpeedCap(deltaSeconds: number, speedBefore: number): number {
+    const { maxSpeed, checkDashSpeed, checkRecoverySeconds } = this.tuning;
+
+    if (!this.check) {
+      return maxSpeed;
+    }
+
+    const bleedRate = (checkDashSpeed - maxSpeed) / checkRecoverySeconds;
+
+    return Math.max(maxSpeed, speedBefore - bleedRate * deltaSeconds);
+  }
+
+  /** Moves a check along; it's over once the dash and the recovery after it have both run. */
+  private advanceCheck(deltaSeconds: number): void {
+    if (!this.check) {
+      return;
+    }
+
+    this.check.elapsed += deltaSeconds;
+
+    if (this.check.elapsed >= this.tuning.checkDashSeconds + this.tuning.checkRecoverySeconds) {
+      this.check = undefined;
+    }
+  }
+
+  /**
+   * One step of a check's dash. `commit` holds the line it started on at full dash speed; `carve`
+   * swings toward the facing (still turning toward the mouse) and speeds up to dash speed.
+   */
+  private stepDash(deltaSeconds: number): void {
+    const check = this.check!;
+    const { checkDashSpeed, checkCarveAcceleration } = this.tuning;
+
+    if (check.style === 'commit') {
+      this.velocity.x = check.direction.x * checkDashSpeed;
+      this.velocity.y = check.direction.y * checkDashSpeed;
+    } else {
+      this.carveToward(this.facing, deltaSeconds);
+      this.velocity.x += this.facing.x * checkCarveAcceleration * deltaSeconds;
+      this.velocity.y += this.facing.y * checkCarveAcceleration * deltaSeconds;
+      this.limitSpeed(checkDashSpeed);
+    }
+
+    this.position.x += this.velocity.x * deltaSeconds;
+    this.position.y += this.velocity.y * deltaSeconds;
+    this.collideWithRink();
+  }
+
+  /** Ends any check and its cooldown at once, e.g. when lining up for a faceoff. */
+  cancelCheck(): void {
+    this.check = undefined;
+    this.checkCooldown = 0;
   }
 
   collideWithRink(): void {

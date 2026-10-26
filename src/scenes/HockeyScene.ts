@@ -17,7 +17,7 @@ import {
 import { assignStartingSpots, FACEOFF_LAYOUTS, type FaceoffLayout } from '../sim/formation';
 import { MATCH_PHASE_RULES } from '../sim/matchPhase';
 import type { FaceoffStage } from '../sim/faceoff';
-import { Skater, type PlayingPosition, type Team } from '../sim/Skater';
+import { CHECK_STYLES, Skater, type CheckStyle, type PlayingPosition, type Team } from '../sim/Skater';
 import { clamp, lerpVec, type CircleBody, type Vec2 } from '../sim/geometry';
 import { getShotPower } from '../sim/shotCharge';
 import { CameraController, CAMERA_TUNING } from './CameraController';
@@ -86,6 +86,14 @@ const FACEOFF_LAYOUT_LABELS: Record<FaceoffLayout, string> = {
 const PERIOD_LENGTH_CHOICES = [30, 60, 120, 180, 300];
 /** Countdown numbers sit above the center dot so the respawned puck stays visible. */
 const COUNTDOWN_Y = RINK_HEIGHT / 2 - 150;
+/** Check dash afterimages: one left this often (ms), starting this see-through, fading out over this long (ms). */
+const DASH_AFTERIMAGE_INTERVAL_MS = 30;
+const DASH_AFTERIMAGE_ALPHA = 0.55;
+const DASH_AFTERIMAGE_FADE_MS = 220;
+const CHECK_STYLE_LABELS: Record<CheckStyle, string> = {
+  commit: 'commit (locked line)',
+  carve: 'carve (steer with mouse)',
+};
 /** Faceoff timing bar, drawn on the ice above the dot (px). */
 const FACEOFF_BAR_WIDTH = 180;
 const FACEOFF_BAR_HEIGHT = 14;
@@ -225,6 +233,10 @@ export class HockeyScene extends Phaser.Scene {
    */
   private teammateMarkerPoints = new Map<Skater, Vec2>();
   private cameraController!: CameraController;
+  /** The fixed camera that draws only the HUD; anything added to the rink later must be hidden from it. */
+  private hudCamera!: Phaser.Cameras.Scene2D.Camera;
+  /** When each skater last left a dash afterimage (scene time, ms). */
+  private readonly lastAfterimageAt = new Map<Skater, number>();
   /** Testing overlay (pause menu option): the camera's focus point on the ice and its zoom numbers on the HUD. */
   private cameraDebugMarker!: Phaser.GameObjects.Graphics;
   private cameraDebugText!: Phaser.GameObjects.Text;
@@ -253,6 +265,7 @@ export class HockeyScene extends Phaser.Scene {
     this.teammateIcons.clear();
     this.teammateIconMasks.clear();
     this.teammateMarkerPoints.clear();
+    this.lastAfterimageAt.clear();
     this.lastPhase = 'faceoff';
     this.lastPuckRespawns = 0;
     this.goFlashUntil = 0;
@@ -386,6 +399,14 @@ export class HockeyScene extends Phaser.Scene {
         },
       },
       {
+        label: 'Check dash',
+        value: () => CHECK_STYLE_LABELS[this.engine.checkStyle],
+        change: () => {
+          const next = (CHECK_STYLES.indexOf(this.engine.checkStyle) + 1) % CHECK_STYLES.length;
+          this.engine.checkStyle = CHECK_STYLES[next];
+        },
+      },
+      {
         label: 'Faceoff layout',
         value: () => FACEOFF_LAYOUT_LABELS[this.engine.faceoffLayout],
         change: () => {
@@ -477,9 +498,9 @@ export class HockeyScene extends Phaser.Scene {
     );
 
     const rinkCamera = this.cameras.main.setBounds(0, 0, RINK_WIDTH, RINK_HEIGHT);
-    const hudCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height);
+    this.hudCamera = this.cameras.add(0, 0, this.scale.width, this.scale.height);
     rinkCamera.ignore([...this.hudObjects]);
-    hudCamera.ignore(this.children.list.filter((object) => !this.hudObjects.has(object)));
+    this.hudCamera.ignore(this.children.list.filter((object) => !this.hudObjects.has(object)));
     this.updateCamera(0);
   }
 
@@ -912,7 +933,7 @@ export class HockeyScene extends Phaser.Scene {
   private updateHelpText(): void {
     this.helpText.setText(
       `${MOVEMENT_SCHEME_HELP[this.movementScheme]}   ` +
-        'Mouse: aim   Left click: shoot (hold to charge)   Right click: pass\n' +
+        'Mouse: aim   Left click: shoot (hold to charge), or check without the puck   Right click: pass\n' +
         'Space: switch player (without the puck)   Esc/P: pause (Options: controls, camera, faceoff layout)\n' +
         'Testing: R reset puck   B whistle   1-5 faceoff at center / upper-left / lower-left / upper-right / lower-right',
     );
@@ -947,11 +968,14 @@ export class HockeyScene extends Phaser.Scene {
       aim: this.getPointerWorldPosition(),
       shoot: shootHeld || this.keepChargingAfterResume,
       pass: pointer.rightButtonDown(),
+      // Same button as shoot: it checks when you don't have the puck.
+      check: shootHeld,
     };
 
     this.engine.update(controls, deltaMs / 1000);
     this.drawAim(controls.aim);
     this.syncSprites();
+    this.leaveDashAfterimages();
     this.updateCamera(deltaMs / 1000);
     this.updatePuckIndicator();
     this.updateTeammateIndicators();
@@ -976,6 +1000,41 @@ export class HockeyScene extends Phaser.Scene {
 
     const puckPosition = this.getDrawPosition(puck);
     this.puckSprite.setPosition(puckPosition.x, puckPosition.y).setDepth(ON_ICE_BASE_DEPTH + puckPosition.y);
+  }
+
+  /**
+   * While a skater dashes into a check, drops fading copies of its sprite behind it, tinted in
+   * its team color, so the burst of speed reads. The copies live on the rink camera only.
+   */
+  private leaveDashAfterimages(): void {
+    const now = this.time.now;
+
+    this.skaterSprites.forEach(({ sprite }, skater) => {
+      if (!skater.isDashing) {
+        return;
+      }
+
+      const last = this.lastAfterimageAt.get(skater) ?? 0;
+
+      if (now - last < DASH_AFTERIMAGE_INTERVAL_MS) {
+        return;
+      }
+
+      this.lastAfterimageAt.set(skater, now);
+      const ghost = this.add
+        .sprite(sprite.x, sprite.y, sprite.texture.key, sprite.frame.name)
+        .setScale(sprite.scaleX)
+        .setDepth(sprite.depth - 1)
+        .setTintFill(TEAM_COLORS[skater.team])
+        .setAlpha(DASH_AFTERIMAGE_ALPHA);
+      this.hudCamera.ignore(ghost);
+      this.tweens.add({
+        targets: ghost,
+        alpha: 0,
+        duration: DASH_AFTERIMAGE_FADE_MS,
+        onComplete: () => ghost.destroy(),
+      });
+    });
   }
 
   /**

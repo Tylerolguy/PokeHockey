@@ -163,7 +163,7 @@ The current default is the "mouse-facing" movement scheme.
 | --- | --- |
 | WASD | Skate in screen directions, at full speed in any direction |
 | Mouse | Facing and aim; the skater turns toward the cursor at 7 rad/s |
-| Left click | Shoot: hold to charge, release to fire. At faceoffs: stop the timing bar, then the aiming arrow |
+| Left click | With the puck: shoot (hold to charge, release to fire). Without it: check (a dash toward the mouse). At faceoffs: stop the timing bar, then the aiming arrow |
 | Right click | Pass toward the cursor (500–800 px/s, firmer for longer passes, full firmness at 700 px) |
 | Space | Switch to the teammate closest to the mouse, only when not carrying the puck. An off-screen teammate counts as being at their edge marker, so point at the marker to pick them |
 | Esc / P | Pause; Esc / P again or the menu's Resume button unpauses |
@@ -178,6 +178,7 @@ The current default is the "mouse-facing" movement scheme.
   - **Movement controls:** mouse-facing, directional or tank.
   - **Space switches to:** the teammate closest to the mouse (default), or the next in the lineup.
   - **Opponents chase puck:** on or off.
+  - **Check dash:** commit (default) or carve (see Checking).
   - **Faceoff layout:** hash marks (default), box or diamond (see Teams and Positions).
   - **Period length:** 0:30, 1:00, 2:00, 3:00 (default) or 5:00. Changing it restarts the current period's clock.
   - **Goals to win:** off (default), 1, 3, 5 or 10.
@@ -197,6 +198,16 @@ The current default is the "mouse-facing" movement scheme.
 - **While charging a shot:** acceleration and top speed drop to 55%.
 - **Collisions:** skaters are 22 px circles. Skater-on-skater hits are weighted by mass with a bounce of 0.3. Bounce is 0.35 off the boards and 0.2 off the nets.
 - **Visual markers:** each skater has a ring in its team colour (blue for you, red for opponents). The controlled skater's ring has a facing pointer.
+
+### Checking (`Skater.startCheck`, numbers in `DEFAULT_SKATER_TUNING`)
+
+- **The button:** left click, the same as shoot, does a check when you don't have the puck. It goes on the press (holding does nothing more), only in live play.
+- **The dash:** a burst toward the mouse at 720 px/s (about twice top speed) for 0.11 s, roughly 80 px (kept short for now; some Pokémon will dash farther later). The Pokémon turns to face it, and movement keys are ignored during it. The extra speed then bleeds off evenly over 0.3 s, during which you can steer normally. The next check can start 0.9 s after the last one began.
+- **Two dash styles** to compare (pause menu → Options → Check dash):
+  - **Commit (default):** full speed at once, locked on the line you clicked toward.
+  - **Carve:** reaches full speed in under 0.1 s along the facing, which keeps turning toward the mouse, so you can steer the dash.
+- **The look:** while dashing, fading afterimages in the team colour stream behind the Pokémon.
+- **Not built yet:** what a check does on contact (knocking Pokémon around, stealing the puck). Bumping into someone mid-dash is just the normal skater collision for now.
 
 ### Puck and Possession
 
@@ -256,7 +267,7 @@ The match is a state machine. Each phase has rules (`MATCH_PHASE_RULES`: whether
 
 ### Not Built Yet (vs. sections 3–10)
 
-- **Gameplay:** body checks and poke checks, Pokémon moves and abilities, per-species stats beyond mass, and stamina.
+- **Gameplay:** what a check does on contact (the dash exists), poke checks and puck stealing, Pokémon moves and abilities, per-species stats beyond mass, and stamina.
 - **Rules:** penalties, offsides, icing, overtime and shootouts. Real causes of stoppages (puck out of play, goalie covering it). A pre-game phase and intermission extras beyond the period-end screen.
 - **Meta:** collection, progression, menus (beyond the pause menu) and multiplayer.
 - **AI:** teammate AI, and a goalie save mechanic beyond the shot-contact odds.

@@ -20,7 +20,8 @@
 
 - Match the surrounding style: doc comments on exported things and non-obvious logic, descriptive names, no abbreviations.
 - Tunable numbers live in one place per system (`DEFAULT_SKATER_TUNING`, `CAMERA_TUNING`, constants at the top of each file) with a comment saying what they do and their units.
-- Testing toggles are temporary and marked as such in code. Settings live in the pause menu's Options submenu (`getPauseOptions` in `HockeyScene`): movement scheme, Space switching mode, opponents chase puck, camera mode, swap camera style, camera debug. Add new ones there, not as keys. The only testing key left is R (reset puck). Esc / P pauses.
+- Testing toggles are temporary and marked as such in code. Settings live in the pause menu's Options submenu (`getPauseOptions` in `HockeyScene`): movement scheme, Space switching mode, opponents chase puck, camera mode, swap camera style, camera debug. Add new ones there, not as keys. Testing keys are only for actions: R (reset puck), B (whistle a stoppage). Esc / P pauses.
+- Match states (faceoff, live, goalScored, stoppage, periodEnd, gameOver) are a state machine in `src/sim/matchPhase.ts`. Change phase only through the engine's `setPhase` (via `callStoppage`, `endGame`, etc.), and add new phases to its rules and transitions tables.
 - Prefer making behaviour switchable (a mode or toggle) when the user wants to compare options.
 
 ## Workflow

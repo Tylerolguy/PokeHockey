@@ -7,7 +7,18 @@ import { getScoringTeam } from './scoring';
 import { getShotSpeed, isWhiff } from './shotCharge';
 import { getShotContactChances, rollShotContact } from './shotContact';
 import { Skater, type Team } from './Skater';
-import { CENTER_DOT } from './rink';
+import { CENTER_DOT, FACEOFF_DOT_POSITIONS, getNearestFaceoffDot, type FaceoffDot } from './rink';
+import {
+  canTransition,
+  CENTER_ICE_FACEOFF,
+  DEFAULT_MATCH_RULES,
+  MATCH_PHASE_RULES,
+  type MatchPhase,
+  type MatchRules,
+  type StoppageReason,
+} from './matchPhase';
+
+export type { MatchPhase, StoppageReason } from './matchPhase';
 
 /** Fixed simulation step, so physics behave the same at any frame rate. */
 const STEP_SECONDS = 1 / 120;
@@ -23,13 +34,17 @@ const SKATER_RESTITUTION = 0.3;
 const HOME_RADIUS = 6;
 const HOME_SPEED = 20;
 /** After a goal, the shortest time before the line-up, so the goal (puck in the net, GOAL! banner) always registers (s). */
-const WALK_BACK_MIN_SECONDS = 1.5;
-/** After a goal, skaters still not home after this long are placed on their spots (s). */
-const WALK_BACK_MAX_SECONDS = 5;
-/** How hard skaters brake into their spots when walking back: desired speed = distance x this. */
-const WALK_BACK_ARRIVE_GAIN = 2.5;
-/** Frozen countdown before play resumes after a goal (s). */
-const COUNTDOWN_SECONDS = 3;
+const GOAL_RETURN_MIN_SECONDS = 1.5;
+/** After a stoppage, the shortest time before the line-up, so the whistle registers (s). */
+const STOPPAGE_RETURN_MIN_SECONDS = 1;
+/** After a goal or stoppage, skaters still not home after this long are placed on their spots (s). */
+const RETURN_MAX_SECONDS = 5;
+/** How hard skaters brake into their spots when returning to them: desired speed = distance x this. */
+const RETURN_ARRIVE_GAIN = 2.5;
+/** Frozen countdown at every faceoff before the puck goes live (s). */
+const FACEOFF_COUNTDOWN_SECONDS = 3;
+/** How long the period-end screen shows before the next period's faceoff, or game over (s). */
+const PERIOD_END_SECONDS = 4;
 
 /** Ways of steering a skater; the player can switch between them to compare feel. */
 export type MovementControls =
@@ -51,15 +66,6 @@ export interface SkaterControls {
   pass: boolean;
 }
 
-/**
- * What the match is doing:
- * - `play`: normal hockey.
- * - `walkBack`: a goal was scored; everyone skates to their starting spot and the player has no control.
- * - `countdown`: everyone is on their spot and the puck is back on the center dot; nobody moves
- *   until the countdown ends.
- */
-export type MatchPhase = 'play' | 'walkBack' | 'countdown';
-
 /** How Space picks the next skater to control: lineup order, or nearest the cursor. */
 export type SwitchMode = 'nextInList' | 'closestToAim';
 
@@ -70,9 +76,21 @@ export class HockeyEngine {
   public opponentsChasePuck = false;
   /** Goals scored by each team. */
   public readonly score: Record<Team, number> = { player: 0, opponent: 0 };
-  /** The team that just scored, from the goal until the countdown starts. */
+  /** The team that just scored, from the goal until the next faceoff (and on through game over). */
   public goalScoredBy?: Team;
-  public phase: MatchPhase = 'play';
+  /** The match's current state; see matchPhase.ts. Changed only through `setPhase`. */
+  public phase: MatchPhase = 'faceoff';
+  /** Why play is stopped, during the `stoppage` phase. */
+  public stoppageReason?: StoppageReason;
+  /** Who won, once the phase is `gameOver`; 'tie' if the score was level. */
+  public winner?: Team | 'tie';
+  public readonly rules: MatchRules = { ...DEFAULT_MATCH_RULES };
+  /** The period being played, from 1 to `rules.periods`. */
+  public period = 1;
+  /** Game clock: seconds left in this period. Only runs while the puck is live. */
+  public clockRemaining = this.rules.periodSeconds;
+  /** Where the current or next faceoff happens: center ice, or the dot nearest a stoppage. */
+  public faceoffDot: FaceoffDot = CENTER_ICE_FACEOFF;
   /** Counts up each time the puck respawns on the center dot, so the view can animate it in. */
   public puckRespawns = 0;
   private phaseSeconds = 0;
@@ -97,11 +115,58 @@ export class HockeyEngine {
   ) {
     this.random = createRandom(seed);
     this.setControlledSkater(skaters[0]);
+    // The match opens with a faceoff.
+    this.lineUpForFaceoff();
   }
 
-  /** Seconds left before play resumes, while in the `countdown` phase. */
+  /** Seconds left before the puck goes live, during the `faceoff` phase. */
   get countdownRemaining(): number {
-    return this.phase === 'countdown' ? Math.max(0, COUNTDOWN_SECONDS - this.phaseSeconds) : 0;
+    return this.phase === 'faceoff' ? Math.max(0, FACEOFF_COUNTDOWN_SECONDS - this.phaseSeconds) : 0;
+  }
+
+  /** How long (s) the match has been in its current phase. */
+  get phaseElapsed(): number {
+    return this.phaseSeconds;
+  }
+
+  /** Changes the period length and restarts this period's clock at it. */
+  setPeriodLength(seconds: number): void {
+    this.rules.periodSeconds = seconds;
+    this.clockRemaining = seconds;
+  }
+
+  /**
+   * Blows the whistle: play stops, the puck is dead, and everyone skates to their spots for a
+   * faceoff at the dot nearest the puck. Only while the puck is live; returns whether play was stopped.
+   */
+  callStoppage(reason: StoppageReason): boolean {
+    if (!canTransition(this.phase, 'stoppage')) {
+      return false;
+    }
+
+    this.killPlay();
+    this.faceoffDot = getNearestFaceoffDot(this.puck.position);
+    this.setPhase('stoppage');
+    this.stoppageReason = reason;
+
+    return true;
+  }
+
+  /**
+   * Ends the match on the current score. Called when the last period ends or the goal limit is
+   * reached. Returns whether it ended (it can't from a faceoff or once over).
+   */
+  endGame(): boolean {
+    if (!canTransition(this.phase, 'gameOver')) {
+      return false;
+    }
+
+    const { player, opponent } = this.score;
+    this.winner = player === opponent ? 'tie' : player > opponent ? 'player' : 'opponent';
+    this.killPlay();
+    this.setPhase('gameOver');
+
+    return true;
   }
 
   /** The skater the player's input drives: whichever has `controlledByPlayer` set. */
@@ -118,7 +183,7 @@ export class HockeyEngine {
 
   /**
    * Switches the player to another skater on their team, unless the one they control has the
-   * puck or play is stopped after a goal. `aim` is the cursor, used by 'closestToAim'.
+   * puck or the phase doesn't give the player control. `aim` is the cursor, used by 'closestToAim'.
    * `pickPositions` optionally says where a skater counts as being for that (e.g. the on-screen
    * marker of a teammate who's off screen); others use their real position. Returns whether
    * control changed.
@@ -126,7 +191,7 @@ export class HockeyEngine {
   switchControlledSkater(mode: SwitchMode, aim: Vec2, pickPositions?: Map<Skater, Vec2>): boolean {
     const current = this.controlledSkater;
 
-    if (this.phase !== 'play' || this.puck.carrier === current) {
+    if (!MATCH_PHASE_RULES[this.phase].playerControl || this.puck.carrier === current) {
       return false;
     }
 
@@ -160,13 +225,13 @@ export class HockeyEngine {
     }
   }
 
-  /** Drops the puck, loose and still, back on the center dot. */
-  resetPuck(): void {
+  /** Drops the puck, loose and still, on `spot` (the center dot by default). */
+  resetPuck(spot: Vec2 = CENTER_DOT): void {
     if (this.puck.carrier) {
       this.puck.carrier.shotCharge = undefined;
     }
 
-    this.puck.resetTo(CENTER_DOT);
+    this.puck.resetTo(spot);
   }
 
   /** Direction a shot would travel: the aim, limited to the skater's shooting arcs (if any) around their facing. */
@@ -204,29 +269,98 @@ export class HockeyEngine {
     }
 
     this.phaseSeconds += deltaSeconds;
+    this.phaseSteps[this.phase](controls, deltaSeconds);
 
-    switch (this.phase) {
-      case 'play':
-        this.stepPlay(controls, deltaSeconds);
-        break;
-      case 'walkBack':
-        this.stepWalkBack(deltaSeconds);
-        break;
-      case 'countdown':
-        // Everyone frozen on their spot.
-        if (this.phaseSeconds >= COUNTDOWN_SECONDS) {
-          this.setPhase('play');
-        }
-        break;
+    // After the phase's step, so a goal on the last step counts before time runs out.
+    if (MATCH_PHASE_RULES[this.phase].clockRuns) {
+      this.runClock(deltaSeconds);
     }
   }
 
+  /** Counts the game clock down; at zero the period is over. */
+  private runClock(deltaSeconds: number): void {
+    this.clockRemaining = Math.max(0, this.clockRemaining - deltaSeconds);
+
+    if (this.clockRemaining === 0) {
+      this.killPlay();
+      this.setPhase('periodEnd');
+    }
+  }
+
+  /** What each phase does every simulation step. */
+  private readonly phaseSteps: Record<MatchPhase, (controls: SkaterControls, deltaSeconds: number) => void> = {
+    faceoff: () => this.stepFaceoff(),
+    live: (controls, deltaSeconds) => this.stepLive(controls, deltaSeconds),
+    goalScored: (_, deltaSeconds) => this.stepReturnToSpots(deltaSeconds, GOAL_RETURN_MIN_SECONDS),
+    stoppage: (_, deltaSeconds) => this.stepReturnToSpots(deltaSeconds, STOPPAGE_RETURN_MIN_SECONDS),
+    periodEnd: (_, deltaSeconds) => this.stepPeriodEnd(deltaSeconds),
+    gameOver: (_, deltaSeconds) => this.stepCoast(deltaSeconds),
+  };
+
+  /**
+   * Moves to `phase`, restarting the phase timer. Throws on a move `MATCH_PHASE_TRANSITIONS`
+   * doesn't allow; the opening faceoff (faceoff to faceoff) is the one exception.
+   */
   private setPhase(phase: MatchPhase): void {
+    const isOpeningFaceoff = this.phase === 'faceoff' && phase === 'faceoff';
+
+    if (!canTransition(this.phase, phase) && !isOpeningFaceoff) {
+      throw new Error(`Match can't go from ${this.phase} to ${phase}`);
+    }
+
+    this.stoppageReason = undefined;
     this.phase = phase;
     this.phaseSeconds = 0;
   }
 
-  private stepPlay(controls: SkaterControls, deltaSeconds: number): void {
+  /** Everyone frozen on their spot until the countdown ends; then the puck is live. */
+  private stepFaceoff(): void {
+    if (this.phaseSeconds >= FACEOFF_COUNTDOWN_SECONDS) {
+      this.setPhase('live');
+    }
+  }
+
+  /**
+   * Everyone coasts during the period-end screen. Then the next period starts with a faceoff at
+   * center ice and a full clock, or after the last period the game is over.
+   */
+  private stepPeriodEnd(deltaSeconds: number): void {
+    this.stepCoast(deltaSeconds);
+
+    if (this.phaseSeconds < PERIOD_END_SECONDS) {
+      return;
+    }
+
+    if (this.period >= this.rules.periods) {
+      this.endGame();
+      return;
+    }
+
+    this.period += 1;
+    this.clockRemaining = this.rules.periodSeconds;
+    this.faceoffDot = CENTER_ICE_FACEOFF;
+    this.lineUpForFaceoff();
+  }
+
+  /** Nobody is steered (period over or match decided), so everyone coasts to a stop. */
+  private stepCoast(deltaSeconds: number): void {
+    this.skaters.forEach((skater) => skater.update({ x: 0, y: 0 }, deltaSeconds));
+    this.resolveSkaterCollisions();
+    this.puck.update(deltaSeconds);
+  }
+
+  /** Stops play: drops any wind-ups and knocks the puck off whoever has it, right where it is. */
+  private killPlay(): void {
+    this.skaters.forEach((skater) => {
+      skater.shotCharge = undefined;
+    });
+
+    if (this.puck.carrier) {
+      this.puck.release({ x: 0, y: 0 });
+    }
+  }
+
+  private stepLive(controls: SkaterControls, deltaSeconds: number): void {
     this.handleStickControls(this.controlledSkater, controls, deltaSeconds);
     this.skaters.forEach((skater) => {
       const { move, aim } = this.getControls(skater, controls);
@@ -240,13 +374,15 @@ export class HockeyEngine {
   }
 
   /**
-   * Everyone skates back to their starting spot while the dead puck sits in the net. Skaters pass
-   * through each other on the way so nobody gets held up; solid collisions return at the countdown.
+   * After a goal or stoppage, everyone skates to their faceoff spot while the dead puck stays put.
+   * Skaters pass through each other on the way so nobody gets held up; solid collisions return at
+   * the faceoff. Lines up once everyone is home and at least `minSeconds` have passed, or after
+   * `RETURN_MAX_SECONDS` regardless.
    */
-  private stepWalkBack(deltaSeconds: number): void {
+  private stepReturnToSpots(deltaSeconds: number, minSeconds: number): void {
     this.skaters.forEach((skater) => {
       const spot = this.getFaceoffSpot(skater);
-      const { move, aim } = this.walkBackControls(skater, spot.position, spot.facing);
+      const { move, aim } = this.returnToSpotControls(skater, spot.position, spot.facing);
       const { direction } = this.steer(skater, move, aim, deltaSeconds);
       skater.update(direction, deltaSeconds);
     });
@@ -254,7 +390,7 @@ export class HockeyEngine {
 
     const allHome = this.skaters.every((skater) => this.isHome(skater));
 
-    if ((allHome && this.phaseSeconds >= WALK_BACK_MIN_SECONDS) || this.phaseSeconds >= WALK_BACK_MAX_SECONDS) {
+    if ((allHome && this.phaseSeconds >= minSeconds) || this.phaseSeconds >= RETURN_MAX_SECONDS) {
       this.lineUpForFaceoff();
     }
   }
@@ -263,11 +399,11 @@ export class HockeyEngine {
    * Skate to `home` and stop there: steers by the gap between the velocity it wants and the one it
    * has, so it slows on arrival despite the ice. Faces where it's going, then its starting direction.
    */
-  private walkBackControls(skater: Skater, home: Vec2, homeFacing: Vec2): SkaterControls {
+  private returnToSpotControls(skater: Skater, home: Vec2, homeFacing: Vec2): SkaterControls {
     const dx = home.x - skater.position.x;
     const dy = home.y - skater.position.y;
     const distance = Math.hypot(dx, dy);
-    const desiredSpeed = Math.min(skater.tuning.maxSpeed, distance * WALK_BACK_ARRIVE_GAIN);
+    const desiredSpeed = Math.min(skater.tuning.maxSpeed, distance * RETURN_ARRIVE_GAIN);
     const steer =
       distance > 0
         ? { x: (dx / distance) * desiredSpeed - skater.velocity.x, y: (dy / distance) * desiredSpeed - skater.velocity.y }
@@ -287,7 +423,7 @@ export class HockeyEngine {
   }
 
   private getFaceoffSpot(skater: Skater): StartingSpot {
-    return getStartingSpot(skater.team, skater.playingPosition, this.faceoffTeam);
+    return getStartingSpot(skater.team, skater.playingPosition, this.faceoffTeam, this.faceoffDot);
   }
 
   private isHome(skater: Skater): boolean {
@@ -296,7 +432,7 @@ export class HockeyEngine {
     return Math.hypot(home.x - skater.position.x, home.y - skater.position.y) < HOME_RADIUS && skater.speed < HOME_SPEED;
   }
 
-  /** Snaps everyone exactly onto their spots, respawns the puck on the center dot, and starts the countdown. */
+  /** Snaps everyone exactly onto their spots, respawns the puck on the faceoff dot, and starts the faceoff. */
   private lineUpForFaceoff(): void {
     this.skaters.forEach((skater) => {
       const spot = this.getFaceoffSpot(skater);
@@ -310,13 +446,16 @@ export class HockeyEngine {
     // The player takes the faceoff with their center.
     const playerCenter = this.skaters.find((skater) => skater.team === 'player' && skater.playingPosition === 'center');
     this.setControlledSkater(playerCenter ?? this.skaters[0]);
-    this.resetPuck();
+    this.resetPuck(FACEOFF_DOT_POSITIONS[this.faceoffDot]);
     this.puckRespawns += 1;
     this.goalScoredBy = undefined;
-    this.setPhase('countdown');
+    this.setPhase('faceoff');
   }
 
-  /** Counts a goal when the puck crosses into a net and sends everyone back to their spots. */
+  /**
+   * Counts a goal when the puck crosses into a net. Ends the match if that reaches the goal limit,
+   * otherwise sends everyone back to their spots.
+   */
   private checkForGoal(): void {
     const scorer = getScoringTeam(this.puck);
 
@@ -327,16 +466,18 @@ export class HockeyEngine {
     this.score[scorer] += 1;
     this.goalScoredBy = scorer;
     this.faceoffTeam = scorer === 'player' ? 'opponent' : 'player';
-    this.skaters.forEach((skater) => {
-      skater.shotCharge = undefined;
-    });
+    this.faceoffDot = CENTER_ICE_FACEOFF;
 
-    // Carried in: the puck stays in the net and the carrier skates off without it.
-    if (this.puck.carrier) {
-      this.puck.release({ x: 0, y: 0 });
+    const { goalsToWin } = this.rules;
+
+    if (goalsToWin !== undefined && this.score[scorer] >= goalsToWin) {
+      this.endGame();
+      return;
     }
 
-    this.setPhase('walkBack');
+    // Carried in: the puck stays in the net and the carrier skates off without it.
+    this.killPlay();
+    this.setPhase('goalScored');
   }
 
   /** The player's controls for the controlled skater; AI or idle controls for everyone else. */

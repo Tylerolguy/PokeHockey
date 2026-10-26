@@ -41,7 +41,7 @@ export const CAMERA_TUNING = {
   swapGlideSeconds: 0.45,
   /** The camera never moves faster than this (px/s), even on a long swap. */
   maxCameraSpeed: 3500,
-  /** During goal walk-backs and the faceoff countdown, auto mode frames center ice at this zoom. */
+  /** Whenever the puck is dead (after goals and stoppages, faceoffs, game over), auto mode frames center ice at this zoom. */
   stoppageZoom: 1.25,
   stoppageZoomRate: 2.5,
 };
@@ -58,7 +58,7 @@ export interface CameraInputs {
   puck: Vec2;
   puckSpeed: number;
   isChargingShot: boolean;
-  /** True during goal walk-backs and faceoff countdowns. */
+  /** True whenever the puck is dead: after goals and stoppages, at faceoffs, and once the game is over. */
   isStoppage: boolean;
   /** Where to frame stoppages (the center faceoff dot). */
   faceoff: Vec2;

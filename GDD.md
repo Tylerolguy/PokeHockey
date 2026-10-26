@@ -106,13 +106,13 @@ Snapshot of what's built on `main` as of 2026-10-24. The numbers are current tun
 ### Structure
 
 - **Stack:** TypeScript, Phaser 3 and Vite, as planned.
-- **Simulation:** in `src/sim/`, with no Phaser. It runs on its own: `HockeyEngine`, `Skater`, `Puck`, the rink geometry, the formation and the scoring.
+- **Simulation:** in `src/sim/`, with no Phaser. It runs on its own: `HockeyEngine`, `Skater`, `Puck`, the match state machine (`matchPhase.ts`), the rink geometry, the formation and the scoring.
 - **Presentation:** `HockeyScene` handles input, drawing and the HUD. `PauseScene` is the pause menu, launched over it.
 - **Camera:** `CameraController` (presentation only) places the rink camera each frame from drawn positions, so only part of the 1728×910 rink is on screen. All its numbers are in `CAMERA_TUNING`.
   - **Auto mode (default):** follows the controlled Pokémon leaned 25% toward the puck, on a damped spring. Zoom fits the Pokémon and puck (1.7× close, down to 1.25×), zooms out up to 0.15 more for fast pucks, clamped to 1.15–1.7×, with a deadzone. It zooms out faster than in and nearly freezes while a shot is charging.
   - **Fixed mode:** 1.6× on the controlled Pokémon.
   - **Control swaps:** the camera glides over in about 0.45 s, keeping its speed, with the zoom held until it settles. An instant cut is available as an option.
-  - **Stoppages (auto):** goal walk-backs and countdowns frame center ice at 1.25×.
+  - **Dead puck (auto):** whenever the puck isn't in play, the camera frames the next faceoff's dot at 1.25× (after goals and stoppages, and at faceoffs), or center ice (at period end and game over).
   - **HUD:** on a separate fixed camera. When the puck is off screen, a marker at the screen edge points to it. Teammates who are off screen get a blue marker with their Pokémon icon.
 - **Fixed step:** the simulation updates at 120 Hz. Drawing blends positions between the last two updates, so motion stays smooth at any refresh rate.
 - **Deterministic:** random rolls use a seeded generator, so the same inputs replay the same match. This is groundwork for replays and multiplayer.
@@ -135,12 +135,12 @@ Snapshot of what's built on `main` as of 2026-10-24. The numbers are current tun
 | Goalie | Golurk (330 kg) | Trevenant (71 kg) |
 
 - **Masses** are Pokédex weights and decide who gets pushed around in collisions.
-- **Formation spots** (`formation.ts`; rink markings measured from the art and kept in `rink.ts`):
-  - **Goalie:** the middle of their crease.
-  - **Defense:** the faceoff dots in their own end zone.
-  - **Wings:** the dots just outside their own blue line.
-  - **Center:** depends on the faceoff advantage, below.
-- **Faceoff advantage:** the team with the advantage puts its center 32 px from the puck. The other team's center waits outside the center circle, about 148 px back. The player's team has the advantage at the start of the game, then whoever was just scored on.
+- **Formation spots** (`formation.ts`; rink markings measured from the art and kept in `rink.ts`), depending on the faceoff dot:
+  - **Goalie:** the middle of their crease, wherever the faceoff is.
+  - **Center:** at the dot, on their own side; how close depends on the faceoff advantage, below.
+  - **At center ice:** wings on the dots just outside their own blue line, defense on the dots in their own end zone.
+  - **At any other dot:** wings 50 px back and 95 px to their side of the dot, defense 150 px back and 70 px to their side ("back" is toward their own net). Spots are kept inside the boards and off the nets.
+- **Faceoff advantage:** the team with the advantage puts its center 32 px from the puck. The other team's center waits about 148 px back (outside the center circle at center ice). The player's team has the advantage at the start of the game, then whoever was just scored on.
 
 ### Controls
 
@@ -155,16 +155,19 @@ The current default is the "mouse-facing" movement scheme.
 | Space | Switch to the teammate closest to the mouse, only when not carrying the puck. An off-screen teammate counts as being at their edge marker, so point at the marker to pick them |
 | Esc / P | Pause; Esc / P again or the menu's Resume button unpauses |
 
-- **Pause menu (`PauseScene`):** pausing freezes the whole match where it is: no simulation steps, animations, tweens, or game input (including the testing keys). The frozen frame stays visible, dimmed, behind a menu showing the score and any shot being wound up (its power and hold time), with **Resume**, **Options** and **Restart** buttons. Options holds the testing settings listed above; Esc / P backs out of it to the main menu.
+- **Pause menu (`PauseScene`):** pausing freezes the whole match where it is: no simulation steps, animations, tweens, or game input (including the testing keys). The frozen frame stays visible, dimmed, behind a menu showing the score, period and clock, and any shot being wound up (its power and hold time), with **Resume**, **Options** and **Restart** buttons. Options holds the testing settings listed above; Esc / P backs out of it to the main menu.
   - **Shot wind-up across a pause:** the charge is kept, and it carries on charging the moment play resumes, even with the shoot button up. Pressing shoot hands it back to the button, so releasing fires; left alone, it runs on to a whiff.
   - **Restart** starts a fresh match (score 0–0); testing-toggle choices like the movement scheme are kept.
 
 - **Who you control:** the player always controls exactly one Pokémon (`controlledByPlayer`). Control moves automatically to whichever teammate gains the puck. You start each faceoff on your center.
-- **Testing-only key** (to be removed): **R** resets the puck to center.
+- **Testing-only keys** (to be removed): **R** resets the puck to center. **B** blows the whistle for a stoppage (only while the puck is live).
 - **Testing options** (pause menu → Options; click one to step to its next choice; to be removed or turned into real settings):
   - **Movement controls:** mouse-facing, directional or tank.
   - **Space switches to:** the teammate closest to the mouse (default), or the next in the lineup.
   - **Opponents chase puck:** on or off.
+  - **Period length:** 0:30, 1:00, 2:00, 3:00 (default) or 5:00. Changing it restarts the current period's clock.
+  - **Goals to win:** off (default), 1, 3, 5 or 10.
+  - Restart sets the match options (period length, goals to win) back to their defaults.
   - **Camera:** auto or fixed.
   - **Camera on player swap:** smooth glide or instant cut.
   - **Camera debug overlay:** focus point and zoom numbers.
@@ -210,11 +213,24 @@ The current default is the "mouse-facing" movement scheme.
 
 - **Shot arcs:** an optional limit on shot direction relative to facing. It exists in the code but is off by default, kept for special moves.
 
-### Scoring and Restarts
+### Match States (`matchPhase.ts`)
 
-- **Goals:** a goal counts once the whole puck is past the goal line inside a net. A scoreboard at the top shows YOU and OPP, and "GOAL!" appears in the scoring team's colour.
-- **Walk-back:** after a goal, every Pokémon skates to its formation spot. Player input is ignored and skaters pass through each other. It lasts at least 1.5 s; anyone not home after 5 s is placed on their spot.
-- **Restart:** the puck respawns on the center dot, everyone stays frozen through a 3 – 2 – 1 countdown, then "GO!" and play resumes.
+The match is a state machine. Each phase has rules (`MATCH_PHASE_RULES`: whether the player has control, whether the puck is in play, whether the clock runs), a list of phases it may move to (`MATCH_PHASE_TRANSITIONS`; the engine refuses any other move), and a step in `HockeyEngine`. More phases (pre-game, overtime, shootouts, penalties) slot in the same way.
+
+| Phase | What happens | Goes to |
+| --- | --- | --- |
+| `faceoff` | Everyone frozen on their spot around the faceoff dot, with the puck on it, through a 3 – 2 – 1 countdown, then "GO!". The match opens with one | `live` |
+| `live` | Normal hockey; the only phase with player control, a live puck and a running clock | `goalScored`, `stoppage`, `periodEnd`, `gameOver` |
+| `goalScored` | "GOAL!" in the scorer's colour. The puck stays in the net and everyone skates to their spot for a center-ice faceoff (at least 1.5 s) | `faceoff`, `gameOver` |
+| `stoppage` | The whistle went (`StoppageReason`; only the testing whistle so far). "WHISTLE" shows, the puck is knocked loose and dead, and everyone skates to their spot for a faceoff at the dot nearest the puck (at least 1 s) | `faceoff`, `gameOver` |
+| `periodEnd` | The clock hit 0:00. Everyone coasts while an "END OF 1ST PERIOD" screen shows the score and what's next, for 4 s. After the 1st or 2nd, the next period starts with a full clock and a center-ice faceoff; after the 3rd, the game is over | `faceoff`, `gameOver` |
+| `gameOver` | The match is decided. "YOU WIN!", "OPP WINS" or "TIE GAME" with the final score over center ice; everyone coasts to a stop. Start again from the pause menu's Restart | (none) |
+
+- **Goals:** a goal counts once the whole puck is past the goal line inside a net. A scoreboard at the top shows YOU and OPP.
+- **Game clock (`MatchRules`):** 3 periods of 3:00 (arcade length). It only runs while the puck is live, so it stops for goals, stoppages and faceoffs. The period and clock show in a box under the scores (e.g. "1ST 2:34"), and in the pause menu.
+- **Winning:** after the 3rd period, the team ahead wins; a level score is a tie (overtime/shootout not built). `MatchRules.goalsToWin` can also end it early as soon as a team reaches it (the deciding goal goes straight to `gameOver`); it's off by default.
+- **Returning to spots:** after a goal or stoppage, skaters ignore input and pass through each other. Anyone not home after 5 s is placed on their spot.
+- **Faceoff location (`FaceoffDot`, `FACEOFF_DOT_POSITIONS` in `rink.ts`):** each faceoff happens at one of the 9 dots. Period starts and goals use center ice; a stoppage uses the dot nearest where the puck was when the whistle went.
 
 ### AI
 
@@ -227,7 +243,7 @@ The current default is the "mouse-facing" movement scheme.
 ### Not Built Yet (vs. sections 3–10)
 
 - **Gameplay:** body checks and poke checks, Pokémon moves and abilities, per-species stats beyond mass, and stamina.
-- **Rules:** penalties, offsides, icing, periods and a game clock.
+- **Rules:** penalties, offsides, icing, overtime and shootouts. Real causes of stoppages (puck out of play, goalie covering it). A pre-game phase and intermission extras beyond the period-end screen.
 - **Meta:** collection, progression, menus (beyond the pause menu) and multiplayer.
 - **AI:** teammate AI, and a goalie save mechanic beyond the shot-contact odds.
 

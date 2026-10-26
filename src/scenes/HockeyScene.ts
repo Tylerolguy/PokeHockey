@@ -15,13 +15,14 @@ import {
   type SwitchMode,
 } from '../sim/HockeyEngine';
 import { assignStartingSpots, OPENING_FACEOFF_TEAM } from '../sim/formation';
+import { MATCH_PHASE_RULES } from '../sim/matchPhase';
 import { Skater, type PlayingPosition, type Team } from '../sim/Skater';
 import { clamp, lerpVec, type CircleBody, type Vec2 } from '../sim/geometry';
 import { getShotPower } from '../sim/shotCharge';
 import { CameraController, CAMERA_TUNING } from './CameraController';
 import { PAUSE_KEYS, PAUSE_SCENE_KEY, type PauseMenuData, type PauseMenuOption } from './PauseScene';
 import { PUCK_RADIUS } from '../sim/Puck';
-import { CENTER_DOT, RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RINK_WIDTH } from '../sim/rink';
+import { CENTER_DOT, FACEOFF_DOT_POSITIONS, RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RINK_WIDTH } from '../sim/rink';
 
 /**
  * Who plays, for which team, and at which playing position; the first is the one the player
@@ -59,6 +60,16 @@ const SCORE_BOX_WIDTH = 150;
 const SCORE_BOX_HEIGHT = 46;
 const SCORE_BOX_GAP = 8;
 const TEAM_NAMES: Record<Team, string> = { player: 'YOU', opponent: 'OPP' };
+/** Period and clock box under the scores. */
+const CLOCK_BOX_WIDTH = 150;
+const CLOCK_BOX_HEIGHT = 30;
+/** Period labels by period number (index 0 is the 1st); later ones fall back to the number. */
+const PERIOD_NAMES = ['1ST', '2ND', '3RD'];
+/** Panel behind the period-end and game-over screen (px). */
+const SCREEN_PANEL_WIDTH = 760;
+const SCREEN_PANEL_HEIGHT = 210;
+/** Choices for the "Period length" option (s). */
+const PERIOD_LENGTH_CHOICES = [30, 60, 120, 180, 300];
 /** Countdown numbers sit above the center dot so the respawned puck stays visible. */
 const COUNTDOWN_Y = RINK_HEIGHT / 2 - 150;
 /** How long "GO!" shows after the countdown (ms). */
@@ -123,6 +134,8 @@ const SWITCH_MODE_LABELS: Record<SwitchMode, string> = {
   closestToAim: 'closest to mouse',
 };
 const MOVEMENT_SCHEMES: MovementScheme[] = ['mouseFacing', 'directional', 'tank'];
+/** Choices for the "Goals to win" option; undefined plays on forever. */
+const GOALS_TO_WIN_CHOICES: (number | undefined)[] = [undefined, 1, 3, 5, 10];
 const MOVEMENT_SCHEME_LABELS: Record<MovementScheme, string> = {
   mouseFacing: 'mouse-facing',
   directional: 'directional',
@@ -148,10 +161,17 @@ export class HockeyScene extends Phaser.Scene {
   private moveKeys!: Record<'up' | 'down' | 'left' | 'right', Phaser.Input.Keyboard.Key>;
   private helpText!: Phaser.GameObjects.Text;
   private scoreTexts!: Record<Team, Phaser.GameObjects.Text>;
-  private goalBanner!: Phaser.GameObjects.Text;
-  /** Big 3-2-1 before play resumes after a goal, then "GO!". */
+  /** Under the scoreboard: "GOAL!" in the scorer's color after a goal, "WHISTLE" during a stoppage. */
+  private phaseBanner!: Phaser.GameObjects.Text;
+  /** Big 3-2-1 at every faceoff, then "GO!". */
   private countdownText!: Phaser.GameObjects.Text;
-  private lastPhase: MatchPhase = 'play';
+  /** Period and game clock, in a box under the scores. */
+  private clockText!: Phaser.GameObjects.Text;
+  /** Screen over center ice at period end and game over: a panel, a big title and a subtitle. */
+  private screenPanel!: Phaser.GameObjects.Graphics;
+  private screenTitle!: Phaser.GameObjects.Text;
+  private screenSubtitle!: Phaser.GameObjects.Text;
+  private lastPhase: MatchPhase = 'faceoff';
   private lastPuckRespawns = 0;
   private goFlashUntil = 0;
   private movementScheme: MovementScheme = MOVEMENT_SCHEMES[0];
@@ -200,7 +220,7 @@ export class HockeyScene extends Phaser.Scene {
     this.teammateIcons.clear();
     this.teammateIconMasks.clear();
     this.teammateMarkerPoints.clear();
-    this.lastPhase = 'play';
+    this.lastPhase = 'faceoff';
     this.lastPuckRespawns = 0;
     this.goFlashUntil = 0;
     this.keepChargingAfterResume = false;
@@ -234,6 +254,8 @@ export class HockeyScene extends Phaser.Scene {
     const keyboard = this.input.keyboard!;
     this.moveKeys = keyboard.addKeys({ up: 'W', down: 'S', left: 'A', right: 'D' }) as typeof this.moveKeys;
     keyboard.on('keydown-R', () => this.engine.resetPuck());
+    // Temporary testing key: blow the whistle for a stoppage until real causes (puck out of play, etc.) exist.
+    keyboard.on('keydown-B', () => this.engine.callStoppage('whistle'));
     keyboard.addCapture('SPACE');
     keyboard.on('keydown-SPACE', () => {
       this.engine.switchControlledSkater(this.switchMode, this.getPointerWorldPosition(), this.teammateMarkerPoints);
@@ -319,6 +341,23 @@ export class HockeyScene extends Phaser.Scene {
         },
       },
       {
+        label: 'Period length',
+        value: () => formatClock(this.engine.rules.periodSeconds),
+        change: () => {
+          const current = PERIOD_LENGTH_CHOICES.indexOf(this.engine.rules.periodSeconds);
+          // Restarts this period's clock at the new length.
+          this.engine.setPeriodLength(PERIOD_LENGTH_CHOICES[(current + 1) % PERIOD_LENGTH_CHOICES.length]);
+        },
+      },
+      {
+        label: 'Goals to win',
+        value: () => String(this.engine.rules.goalsToWin ?? 'off'),
+        change: () => {
+          const current = GOALS_TO_WIN_CHOICES.indexOf(this.engine.rules.goalsToWin);
+          this.engine.rules.goalsToWin = GOALS_TO_WIN_CHOICES[(current + 1) % GOALS_TO_WIN_CHOICES.length];
+        },
+      },
+      {
         label: 'Camera',
         value: () => this.cameraController.mode,
         change: () => this.cameraController.toggleMode(),
@@ -340,10 +379,13 @@ export class HockeyScene extends Phaser.Scene {
     ];
   }
 
-  /** What the pause menu says about the frozen match: the score and any shot being wound up. */
+  /** What the pause menu says about the frozen match: score, period and clock, and any shot being wound up. */
   private getPauseDetails(): string[] {
-    const { score, controlledSkater, puck } = this.engine;
-    const lines = [`${TEAM_NAMES.player} ${score.player} - ${score.opponent} ${TEAM_NAMES.opponent}`];
+    const { score, controlledSkater, puck, period, clockRemaining } = this.engine;
+    const lines = [
+      `${TEAM_NAMES.player} ${score.player} - ${score.opponent} ${TEAM_NAMES.opponent}   ` +
+        `${getPeriodName(period)} ${formatClock(clockRemaining)}`,
+    ];
     const chargeSeconds = controlledSkater.shotCharge;
 
     if (chargeSeconds !== undefined) {
@@ -407,8 +449,9 @@ export class HockeyScene extends Phaser.Scene {
       puck: this.getDrawPosition(puck),
       puckSpeed: puck.speed,
       isChargingShot: controlledSkater.shotCharge !== undefined,
-      isStoppage: phase !== 'play',
-      faceoff: CENTER_DOT,
+      isStoppage: !MATCH_PHASE_RULES[phase].puckInPlay,
+      // Heading to or at a faceoff: frame its dot. Between periods and after the game: center ice.
+      faceoff: phase === 'periodEnd' || phase === 'gameOver' ? CENTER_DOT : FACEOFF_DOT_POSITIONS[this.engine.faceoffDot],
     });
 
     this.cameras.main.setZoom(zoom).centerOn(center.x, center.y);
@@ -568,9 +611,23 @@ export class HockeyScene extends Phaser.Scene {
       player: makeBox('player', centerX - SCORE_BOX_GAP / 2 - SCORE_BOX_WIDTH),
       opponent: makeBox('opponent', centerX + SCORE_BOX_GAP / 2),
     };
-    this.goalBanner = this.addToHud(
+    const clockTop = SCOREBOARD_Y + SCORE_BOX_HEIGHT + 6;
+    boxes.fillStyle(0x0b1220, 0.85);
+    boxes.fillRoundedRect(centerX - CLOCK_BOX_WIDTH / 2, clockTop, CLOCK_BOX_WIDTH, CLOCK_BOX_HEIGHT, 8);
+    this.clockText = this.addToHud(
       this.add
-        .text(centerX, SCOREBOARD_Y + SCORE_BOX_HEIGHT + 14, 'GOAL!', {
+        .text(centerX, clockTop + CLOCK_BOX_HEIGHT / 2, '', {
+          fontFamily: 'monospace',
+          fontSize: '20px',
+          fontStyle: 'bold',
+          color: '#ffffff',
+        })
+        .setOrigin(0.5)
+        .setDepth(HUD_DEPTH),
+    );
+    this.phaseBanner = this.addToHud(
+      this.add
+        .text(centerX, clockTop + CLOCK_BOX_HEIGHT + 10, 'GOAL!', {
           fontFamily: 'monospace',
           fontSize: '40px',
           fontStyle: 'bold',
@@ -596,34 +653,104 @@ export class HockeyScene extends Phaser.Scene {
         .setDepth(HUD_DEPTH)
         .setVisible(false),
     );
+    this.screenPanel = this.addToHud(this.add.graphics().setDepth(HUD_DEPTH).setVisible(false));
+    this.screenPanel.fillStyle(0x0b1220, 0.8);
+    this.screenPanel.fillRoundedRect(
+      centerX - SCREEN_PANEL_WIDTH / 2,
+      COUNTDOWN_Y - 75,
+      SCREEN_PANEL_WIDTH,
+      SCREEN_PANEL_HEIGHT,
+      16,
+    );
+    this.screenTitle = this.addToHud(
+      this.add
+        .text(centerX, COUNTDOWN_Y, '', {
+          fontFamily: 'monospace',
+          fontSize: '64px',
+          fontStyle: 'bold',
+          color: '#ffffff',
+          stroke: '#0b1220',
+          strokeThickness: 10,
+        })
+        .setOrigin(0.5)
+        .setDepth(HUD_DEPTH)
+        .setVisible(false),
+    );
+    this.screenSubtitle = this.addToHud(
+      this.add
+        .text(centerX, COUNTDOWN_Y + 75, '', {
+          fontFamily: 'monospace',
+          fontSize: '22px',
+          color: '#ffffff',
+          align: 'center',
+          lineSpacing: 6,
+        })
+        .setOrigin(0.5)
+        .setDepth(HUD_DEPTH)
+        .setVisible(false),
+    );
     this.updateScoreboard();
   }
 
   private updateScoreboard(): void {
-    const { score, goalScoredBy } = this.engine;
+    const { score } = this.engine;
     this.scoreTexts.player.setText(`${TEAM_NAMES.player}  ${score.player}`);
     this.scoreTexts.opponent.setText(`${score.opponent}  ${TEAM_NAMES.opponent}`);
-    this.goalBanner.setVisible(goalScoredBy !== undefined);
 
-    if (goalScoredBy) {
-      this.goalBanner.setColor(`#${TEAM_COLORS[goalScoredBy].toString(16).padStart(6, '0')}`);
-    }
+    this.clockText.setText(`${getPeriodName(this.engine.period)}   ${formatClock(this.engine.clockRemaining)}`);
 
+    this.updatePhaseBanner();
     this.updateCountdown();
+    this.updateScreen();
     this.animatePuckRespawn();
   }
 
-  /** 3-2-1 while play is frozen after a goal, then a short "GO!" once it resumes. */
+  private updatePhaseBanner(): void {
+    const { goalScoredBy, phase } = this.engine;
+
+    if (goalScoredBy) {
+      this.phaseBanner.setText('GOAL!').setColor(toCssColor(TEAM_COLORS[goalScoredBy])).setVisible(true);
+    } else if (phase === 'stoppage') {
+      this.phaseBanner.setText('WHISTLE').setColor('#ffffff').setVisible(true);
+    } else {
+      this.phaseBanner.setVisible(false);
+    }
+  }
+
+  /** The screen over center ice: the period-end screen, or the result once the game is over. */
+  private updateScreen(): void {
+    const { phase, period, winner, score, rules } = this.engine;
+    const scoreLine = `${TEAM_NAMES.player} ${score.player} - ${score.opponent} ${TEAM_NAMES.opponent}`;
+    const shown = phase === 'periodEnd' || phase === 'gameOver';
+    [this.screenPanel, this.screenTitle, this.screenSubtitle].forEach((object) => object.setVisible(shown));
+
+    if (phase === 'periodEnd') {
+      const next = period < rules.periods ? `Next: ${getPeriodName(period + 1)} PERIOD` : 'Game over next';
+      this.screenTitle.setText(`END OF ${getPeriodName(period)} PERIOD`).setColor('#ffffff');
+      this.screenSubtitle.setText(`${scoreLine}\n${next}`);
+    } else if (phase === 'gameOver' && winner) {
+      if (winner === 'tie') {
+        this.screenTitle.setText('TIE GAME').setColor('#ffffff');
+      } else {
+        const result = winner === 'player' ? `${TEAM_NAMES.player} WIN!` : `${TEAM_NAMES.opponent} WINS`;
+        this.screenTitle.setText(result).setColor(toCssColor(TEAM_COLORS[winner]));
+      }
+
+      this.screenSubtitle.setText(`Final: ${scoreLine}\nEsc: menu (Restart for a new match)`);
+    }
+  }
+
+  /** 3-2-1 while everyone waits at a faceoff, then a short "GO!" once the puck is live. */
   private updateCountdown(): void {
     const { phase } = this.engine;
 
-    if (this.lastPhase === 'countdown' && phase === 'play') {
+    if (this.lastPhase === 'faceoff' && phase === 'live') {
       this.goFlashUntil = this.time.now + GO_FLASH_MS;
     }
 
     this.lastPhase = phase;
 
-    if (phase === 'countdown') {
+    if (phase === 'faceoff') {
       this.countdownText.setText(String(Math.ceil(this.engine.countdownRemaining))).setVisible(true);
     } else if (this.time.now < this.goFlashUntil) {
       this.countdownText.setText('GO!').setVisible(true);
@@ -648,7 +775,7 @@ export class HockeyScene extends Phaser.Scene {
     this.helpText.setText(
       `${MOVEMENT_SCHEME_HELP[this.movementScheme]}   ` +
         'Mouse: aim   Left click: shoot (hold to charge)   Right click: pass\n' +
-        'Space: switch player (without the puck)   R: reset puck (testing)   ' +
+        'Space: switch player (without the puck)   R: reset puck (testing)   B: whistle (testing)   ' +
         'Esc/P: pause (Options: controls, camera)',
     );
   }
@@ -864,6 +991,23 @@ function getPowerColor(power: number): number {
   }
 
   return stops[stops.length - 1].color;
+}
+
+/** "1ST", "2ND", "3RD", then plain numbers for any later period. */
+function getPeriodName(period: number): string {
+  return PERIOD_NAMES[period - 1] ?? String(period);
+}
+
+/** Game clock time as m:ss, rounded up so it reads 0:00 only once time is out. */
+function formatClock(seconds: number): string {
+  const whole = Math.ceil(seconds);
+
+  return `${Math.floor(whole / 60)}:${String(whole % 60).padStart(2, '0')}`;
+}
+
+/** A 0xRRGGBB color as a CSS "#rrggbb" string, for text. */
+function toCssColor(color: number): string {
+  return `#${color.toString(16).padStart(6, '0')}`;
 }
 
 /** Mixes two 0xRRGGBB colors, `t` (0..1) of the way from `from` to `to`. */

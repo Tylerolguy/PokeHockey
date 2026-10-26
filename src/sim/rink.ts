@@ -101,5 +101,42 @@ export const FACEOFF_DOTS: Record<Team, { endZone: Vec2[]; neutralZone: Vec2[] }
   },
 };
 
+/**
+ * Every faceoff dot by name. Left and right are screen halves (the player's team defends the
+ * left), upper and lower are screen top and bottom.
+ */
+export type FaceoffDot =
+  | 'center'
+  | 'leftEndUpper'
+  | 'leftEndLower'
+  | 'leftNeutralUpper'
+  | 'leftNeutralLower'
+  | 'rightNeutralUpper'
+  | 'rightNeutralLower'
+  | 'rightEndUpper'
+  | 'rightEndLower';
+
+export const FACEOFF_DOT_POSITIONS: Record<FaceoffDot, Vec2> = {
+  center: CENTER_DOT,
+  leftEndUpper: FACEOFF_DOTS.player.endZone[0],
+  leftEndLower: FACEOFF_DOTS.player.endZone[1],
+  leftNeutralUpper: FACEOFF_DOTS.player.neutralZone[0],
+  leftNeutralLower: FACEOFF_DOTS.player.neutralZone[1],
+  rightNeutralUpper: FACEOFF_DOTS.opponent.neutralZone[0],
+  rightNeutralLower: FACEOFF_DOTS.opponent.neutralZone[1],
+  rightEndUpper: FACEOFF_DOTS.opponent.endZone[0],
+  rightEndLower: FACEOFF_DOTS.opponent.endZone[1],
+};
+
+/** The faceoff dot closest to `point`, e.g. where the puck was when the whistle went. */
+export function getNearestFaceoffDot(point: Vec2): FaceoffDot {
+  const distanceTo = (dot: FaceoffDot) =>
+    Math.hypot(FACEOFF_DOT_POSITIONS[dot].x - point.x, FACEOFF_DOT_POSITIONS[dot].y - point.y);
+
+  return (Object.keys(FACEOFF_DOT_POSITIONS) as FaceoffDot[]).reduce((best, dot) =>
+    distanceTo(dot) < distanceTo(best) ? dot : best,
+  );
+}
+
 /** Radius of the center faceoff circle, to the outside of its line (px). */
 export const CENTER_CIRCLE_RADIUS = 118;

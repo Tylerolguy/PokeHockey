@@ -140,3 +140,11 @@ export function getNearestFaceoffDot(point: Vec2): FaceoffDot {
 
 /** Radius of the center faceoff circle, to the outside of its line (px). */
 export const CENTER_CIRCLE_RADIUS = 118;
+/** Radius of the four end-zone faceoff circles, to the middle of their line (px). The neutral-zone dots have no circle. */
+export const END_ZONE_CIRCLE_RADIUS = 105;
+
+/**
+ * Where each team's blue line is: the x of its edge facing that team's own end zone (px). The
+ * player's end zone is left of x 644; the opponents' is right of x 1081.
+ */
+export const BLUE_LINE_X: Record<Team, number> = { player: 644, opponent: 1081 };

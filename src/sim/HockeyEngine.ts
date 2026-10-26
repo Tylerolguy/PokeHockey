@@ -1,7 +1,14 @@
 import { clamp, clampDirectionToArcs, resolveCircleCollision, wrapAngle, type Vec2 } from './geometry';
 import { chasePuckControls, idleControls } from './PlayerAI';
+import { FACEOFF_TUNING, FaceoffDraw } from './faceoff';
 import { Puck } from './Puck';
-import { getStartingSpot, OPENING_FACEOFF_TEAM, type StartingSpot } from './formation';
+import {
+  FACEOFF_LAYOUTS,
+  getStartingSpot,
+  OPENING_FACEOFF_TEAM,
+  type FaceoffLayout,
+  type StartingSpot,
+} from './formation';
 import { createRandom } from './random';
 import { getScoringTeam } from './scoring';
 import { getShotSpeed, isWhiff } from './shotCharge';
@@ -41,8 +48,6 @@ const STOPPAGE_RETURN_MIN_SECONDS = 1;
 const RETURN_MAX_SECONDS = 5;
 /** How hard skaters brake into their spots when returning to them: desired speed = distance x this. */
 const RETURN_ARRIVE_GAIN = 2.5;
-/** Frozen countdown at every faceoff before the puck goes live (s). */
-const FACEOFF_COUNTDOWN_SECONDS = 3;
 /** How long the period-end screen shows before the next period's faceoff, or game over (s). */
 const PERIOD_END_SECONDS = 4;
 
@@ -96,11 +101,18 @@ export class HockeyEngine {
   private phaseSeconds = 0;
   private accumulatedSeconds = 0;
   private wasPassHeld = false;
+  /** Shoot held last step, so the faceoff draw reacts to presses rather than holds. */
+  private wasShootHeld = false;
+  /** The current or last faceoff's draw: who won it and where the puck went (see faceoff.ts). */
+  public faceoffDraw?: FaceoffDraw;
   /**
-   * The team whose center lines up right in front of the puck at the next faceoff: the player's
-   * team at the start, then whoever was just scored on.
+   * The team with the advantage at the next faceoff: the player's team at the start, then whoever
+   * was just scored on. It no longer changes where anyone lines up; it's kept for deciding who
+   * wins the draw.
    */
   public faceoffTeam: Team = OPENING_FACEOFF_TEAM;
+  /** Testing option: how the non-centers line up at faceoffs (see `FaceoffLayout`). */
+  public faceoffLayout: FaceoffLayout = FACEOFF_LAYOUTS[0];
 
   /** Seeded so a match with the same inputs plays out the same way (replays, multiplayer sync). */
   private readonly random: () => number;
@@ -119,14 +131,38 @@ export class HockeyEngine {
     this.lineUpForFaceoff();
   }
 
-  /** Seconds left before the puck goes live, during the `faceoff` phase. */
-  get countdownRemaining(): number {
-    return this.phase === 'faceoff' ? Math.max(0, FACEOFF_COUNTDOWN_SECONDS - this.phaseSeconds) : 0;
-  }
-
   /** How long (s) the match has been in its current phase. */
   get phaseElapsed(): number {
     return this.phaseSeconds;
+  }
+
+  /**
+   * Testing jump: stops play and lines everyone straight up for a faceoff on `dot`, countdown and
+   * all. From live play it goes through a stoppage first, so the phase rules still hold. Not once
+   * the game is over. Returns whether it happened.
+   */
+  startFaceoffAt(dot: FaceoffDot): boolean {
+    if (this.phase === 'gameOver') {
+      return false;
+    }
+
+    if (this.phase === 'live') {
+      this.callStoppage('whistle');
+    }
+
+    this.faceoffDot = dot;
+    this.lineUpForFaceoff();
+
+    return true;
+  }
+
+  /** Changes the faceoff layout; during a faceoff, everyone lines up again in the new one. */
+  setFaceoffLayout(layout: FaceoffLayout): void {
+    this.faceoffLayout = layout;
+
+    if (this.phase === 'faceoff') {
+      this.lineUpForFaceoff();
+    }
   }
 
   /** Changes the period length and restarts this period's clock at it. */
@@ -289,7 +325,7 @@ export class HockeyEngine {
 
   /** What each phase does every simulation step. */
   private readonly phaseSteps: Record<MatchPhase, (controls: SkaterControls, deltaSeconds: number) => void> = {
-    faceoff: () => this.stepFaceoff(),
+    faceoff: (controls, deltaSeconds) => this.stepFaceoff(controls, deltaSeconds),
     live: (controls, deltaSeconds) => this.stepLive(controls, deltaSeconds),
     goalScored: (_, deltaSeconds) => this.stepReturnToSpots(deltaSeconds, GOAL_RETURN_MIN_SECONDS),
     stoppage: (_, deltaSeconds) => this.stepReturnToSpots(deltaSeconds, STOPPAGE_RETURN_MIN_SECONDS),
@@ -313,11 +349,33 @@ export class HockeyEngine {
     this.phaseSeconds = 0;
   }
 
-  /** Everyone frozen on their spot until the countdown ends; then the puck is live. */
-  private stepFaceoff(): void {
-    if (this.phaseSeconds >= FACEOFF_COUNTDOWN_SECONDS) {
-      this.setPhase('live');
+  /**
+   * Everyone frozen on their spot while the draw is played out with the shoot button (see
+   * faceoff.ts); once it's decided, the puck shoots out past both centers and play is live.
+   */
+  private stepFaceoff(controls: SkaterControls, deltaSeconds: number): void {
+    const draw = this.faceoffDraw;
+    const pressed = controls.shoot && !this.wasShootHeld;
+    this.wasShootHeld = controls.shoot;
+
+    if (!draw) {
+      return;
     }
+
+    draw.step(deltaSeconds, pressed);
+
+    if (draw.stage !== 'dropped' || !draw.direction) {
+      return;
+    }
+
+    const { dropSpeed, centersUntouchableSeconds } = FACEOFF_TUNING;
+    const centers = this.skaters.filter((skater) => skater.playingPosition === 'center');
+    this.puck.dropFaceoff(
+      { x: draw.direction.x * dropSpeed, y: draw.direction.y * dropSpeed },
+      centers,
+      centersUntouchableSeconds,
+    );
+    this.setPhase('live');
   }
 
   /**
@@ -423,7 +481,7 @@ export class HockeyEngine {
   }
 
   private getFaceoffSpot(skater: Skater): StartingSpot {
-    return getStartingSpot(skater.team, skater.playingPosition, this.faceoffTeam, this.faceoffDot);
+    return getStartingSpot(skater.team, skater.playingPosition, this.faceoffDot, this.faceoffLayout);
   }
 
   private isHome(skater: Skater): boolean {
@@ -449,6 +507,16 @@ export class HockeyEngine {
     this.resetPuck(FACEOFF_DOT_POSITIONS[this.faceoffDot]);
     this.puckRespawns += 1;
     this.goalScoredBy = undefined;
+
+    const opponentCenter = this.skaters.find((skater) => skater.team === 'opponent' && skater.playingPosition === 'center');
+    // Opponents draw it back toward their own end: they defend the right.
+    this.faceoffDraw = new FaceoffDraw(
+      (opponentCenter ?? this.skaters[0]).tuning.faceoffSkill,
+      { x: 1, y: 0 },
+      this.random,
+    );
+    // A button already held doesn't count; the draw needs a fresh press.
+    this.wasShootHeld = true;
     this.setPhase('faceoff');
   }
 

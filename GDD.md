@@ -116,7 +116,7 @@ Snapshot of what's built on `main` as of 2026-10-24. The numbers are current tun
   - **HUD:** on a separate fixed camera. When the puck is off screen, a marker at the screen edge points to it. Teammates who are off screen get a blue marker with their Pokémon icon.
 - **Fixed step:** the simulation updates at 120 Hz. Drawing blends positions between the last two updates, so motion stays smooth at any refresh rate.
 - **Deterministic:** random rolls use a seeded generator, so the same inputs replay the same match. This is groundwork for replays and multiplayer.
-- **Species data:** `src/data/pokemonSpecies.ts`. Each species overrides the default tuning; only mass is set per species so far.
+- **Species data:** `src/data/pokemonSpecies.ts`. Each species overrides the default tuning; only mass is set per species so far. `faceoffSkill` (0..1, default 0.5) exists for every Pokémon but isn't set per species yet.
 
 ### Teams and Positions
 
@@ -135,12 +135,25 @@ Snapshot of what's built on `main` as of 2026-10-24. The numbers are current tun
 | Goalie | Golurk (330 kg) | Trevenant (71 kg) |
 
 - **Masses** are Pokédex weights and decide who gets pushed around in collisions.
-- **Formation spots** (`formation.ts`; rink markings measured from the art and kept in `rink.ts`), depending on the faceoff dot:
-  - **Goalie:** the middle of their crease, wherever the faceoff is.
-  - **Center:** at the dot, on their own side; how close depends on the faceoff advantage, below.
-  - **At center ice:** wings on the dots just outside their own blue line, defense on the dots in their own end zone.
-  - **At any other dot:** wings 50 px back and 95 px to their side of the dot, defense 150 px back and 70 px to their side ("back" is toward their own net). Spots are kept inside the boards and off the nets.
-- **Faceoff advantage:** the team with the advantage puts its center 32 px from the puck. The other team's center waits about 148 px back (outside the center circle at center ice). The player's team has the advantage at the start of the game, then whoever was just scored on.
+- **Faceoff formation** (`formation.ts`; rink markings measured from the art and kept in `rink.ts`: circles are 118 px at center, 105 px in the end zones; blue lines at x 644–654 and 1070–1081). Everything depends on the faceoff dot and on whether it's center ice, a neutral-zone dot, the team's own end or the end it attacks:
+  - **Centers:** both take the draw at the dot, 24 px either side of it.
+  - **Goalies:** the middle of their crease.
+  - **Wings and defense:** one of three testing layouts (`FaceoffLayout`, pause menu → Options → Faceoff layout; changing it during a faceoff lines everyone up again):
+
+| Layout | Wings | Defense |
+| --- | --- | --- |
+| Hash marks (default) | On the circle edge, level with the dot | Mid-rink: wide behind the circle. Own end: the inside one level with the goalie, mid-zone (halfway between goal line and blue line); the boards-side one 30 px outside the circle, straight behind their center. Attacking end: both at the blue line, each in line behind a wing |
+| Box | Just inside the circle, behind the centers | Tucked in behind them, the same everywhere |
+| Diamond | End zones: the inside wing at the net front (screening in the attacking end, guarding the crease in their own), the other on the circle edge. Mid-rink: on the circle edge | Own end: one on the open circle edge, one behind the center. Attacking end: the points. Mid-rink: one behind the other |
+
+  - Spots are kept inside the boards and off the nets; no two Pokémon overlap in any layout at any dot.
+- **Faceoff advantage:** `faceoffTeam` (the player's team at the start, then whoever was just scored on) no longer changes where anyone stands or who wins the draw; it's unused for now.
+- **Winning the draw** (`faceoff.ts`, numbers in `FACEOFF_TUNING`), with left click (the shoot button):
+  1. "FACEOFF" shows for 0.8 s while everyone is frozen on their spot.
+  2. **Timing bar** above the dot: a white marker crosses it end to end every 0.9 s. Click to stop it in the green zone to win. The green is 32% of the bar against an opposing center with `faceoffSkill` 0, down to 7% at skill 1 (every species is 0.5 for now, so 20%), and sits somewhere different each faceoff. Missing it, or not clicking within 4 s, loses the draw.
+  3. **Aiming arrow** (only if you won): a yellow arrow spins around the dot once every 1.3 s. Click to stop it; that's where the puck goes. It stops by itself after 4 s.
+  4. If the opponents win, they draw the puck back toward their own end, within 60° of straight back.
+  5. The puck shoots out of the dot at 420 px/s straight through both centers, who can't touch it for 0.35 s, so a wing or defender picks it up. Play is live and "GO!" flashes.
 
 ### Controls
 
@@ -150,7 +163,7 @@ The current default is the "mouse-facing" movement scheme.
 | --- | --- |
 | WASD | Skate in screen directions, at full speed in any direction |
 | Mouse | Facing and aim; the skater turns toward the cursor at 7 rad/s |
-| Left click | Shoot: hold to charge, release to fire |
+| Left click | Shoot: hold to charge, release to fire. At faceoffs: stop the timing bar, then the aiming arrow |
 | Right click | Pass toward the cursor (500–800 px/s, firmer for longer passes, full firmness at 700 px) |
 | Space | Switch to the teammate closest to the mouse, only when not carrying the puck. An off-screen teammate counts as being at their edge marker, so point at the marker to pick them |
 | Esc / P | Pause; Esc / P again or the menu's Resume button unpauses |
@@ -160,11 +173,12 @@ The current default is the "mouse-facing" movement scheme.
   - **Restart** starts a fresh match (score 0–0); testing-toggle choices like the movement scheme are kept.
 
 - **Who you control:** the player always controls exactly one Pokémon (`controlledByPlayer`). Control moves automatically to whichever teammate gains the puck. You start each faceoff on your center.
-- **Testing-only keys** (to be removed): **R** resets the puck to center. **B** blows the whistle for a stoppage (only while the puck is live).
+- **Testing-only keys** (to be removed): **R** resets the puck to center. **B** blows the whistle for a stoppage (only while the puck is live). **1–5** jump straight to a faceoff at center ice, upper-left, lower-left, upper-right or lower-right circle (any time but game over; from live play it goes through a stoppage).
 - **Testing options** (pause menu → Options; click one to step to its next choice; to be removed or turned into real settings):
   - **Movement controls:** mouse-facing, directional or tank.
   - **Space switches to:** the teammate closest to the mouse (default), or the next in the lineup.
   - **Opponents chase puck:** on or off.
+  - **Faceoff layout:** hash marks (default), box or diamond (see Teams and Positions).
   - **Period length:** 0:30, 1:00, 2:00, 3:00 (default) or 5:00. Changing it restarts the current period's clock.
   - **Goals to win:** off (default), 1, 3, 5 or 10.
   - Restart sets the match options (period length, goals to win) back to their defaults.
@@ -219,7 +233,7 @@ The match is a state machine. Each phase has rules (`MATCH_PHASE_RULES`: whether
 
 | Phase | What happens | Goes to |
 | --- | --- | --- |
-| `faceoff` | Everyone frozen on their spot around the faceoff dot, with the puck on it, through a 3 – 2 – 1 countdown, then "GO!". The match opens with one | `live` |
+| `faceoff` | Everyone frozen on their spot around the faceoff dot, with the puck on it, while the draw is played (timing bar, then aiming arrow if you won; see Teams and Positions). Then the puck shoots out and "GO!" shows. The match opens with one | `live` |
 | `live` | Normal hockey; the only phase with player control, a live puck and a running clock | `goalScored`, `stoppage`, `periodEnd`, `gameOver` |
 | `goalScored` | "GOAL!" in the scorer's colour. The puck stays in the net and everyone skates to their spot for a center-ice faceoff (at least 1.5 s) | `faceoff`, `gameOver` |
 | `stoppage` | The whistle went (`StoppageReason`; only the testing whistle so far). "WHISTLE" shows, the puck is knocked loose and dead, and everyone skates to their spot for a faceoff at the dot nearest the puck (at least 1 s) | `faceoff`, `gameOver` |

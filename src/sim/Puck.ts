@@ -42,6 +42,9 @@ export class Puck implements CircleBody {
   private carryAngle = 0;
   private lastCarrier?: Skater;
   private regrabCooldown = 0;
+  /** Skaters who can't take the puck at all for `untouchableSeconds`, e.g. both centers as a faceoff shoots out past them. */
+  private readonly untouchableBy = new Set<Skater>();
+  private untouchableSeconds = 0;
   /** True from a shot until it bounces off anything, someone takes the puck, or it slows down. */
   private liveShot = false;
   /** Skaters a live shot is touching that already had their outcome rolled for this contact. */
@@ -101,7 +104,25 @@ export class Puck implements CircleBody {
       return false;
     }
 
+    if (this.untouchableSeconds > 0 && this.untouchableBy.has(skater)) {
+      return false;
+    }
+
     return !(skater === this.lastCarrier && this.regrabCooldown > 0);
+  }
+
+  /**
+   * Shoots a loose puck out from where it sits (a faceoff dot) at `velocity`, with `untouchable`
+   * unable to take it for `seconds` so it goes straight past them.
+   */
+  dropFaceoff(velocity: Vec2, untouchable: Skater[], seconds: number): void {
+    this.carrierSkater = undefined;
+    this.velocity.x = velocity.x;
+    this.velocity.y = velocity.y;
+    this.limitSpeed();
+    this.untouchableBy.clear();
+    untouchable.forEach((skater) => this.untouchableBy.add(skater));
+    this.untouchableSeconds = seconds;
   }
 
   /** True if no net wall lies between `from` and the puck, e.g. so a skater can't grab it through the mesh. */
@@ -129,6 +150,7 @@ export class Puck implements CircleBody {
     this.carrierSkater = undefined;
     this.lastCarrier = undefined;
     this.regrabCooldown = 0;
+    this.untouchableSeconds = 0;
     this.position.x = position.x;
     this.position.y = position.y;
     // Teleport: don't draw the puck sliding across the ice from where it was.
@@ -161,6 +183,7 @@ export class Puck implements CircleBody {
 
   update(deltaSeconds: number): void {
     this.regrabCooldown = Math.max(0, this.regrabCooldown - deltaSeconds);
+    this.untouchableSeconds = Math.max(0, this.untouchableSeconds - deltaSeconds);
 
     if (this.carrierSkater) {
       this.followCarrier(this.carrierSkater, deltaSeconds);

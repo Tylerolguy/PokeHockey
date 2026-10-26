@@ -6,8 +6,8 @@ import type { FaceoffDot } from './rink';
  * it rules and transitions here, and a step in the engine (the `Record` types make each required).
  *
  * - `faceoff`: everyone on their faceoff spot around the faceoff dot (`FaceoffDot`) with the puck
- *   on it. Nobody moves until the countdown ends and the puck is live. Each period opens with one
- *   at center ice, and every goal and stoppage ends in one.
+ *   on it. Nobody moves while the draw is played out (faceoff.ts); then the puck shoots out and is
+ *   live. Each period opens with one at center ice, and every goal and stoppage ends in one.
  * - `live`: normal hockey, with the game clock running.
  * - `goalScored`: a goal just went in. The puck stays in the net while everyone skates back to
  *   their spots for the center-ice faceoff; the player has no control.

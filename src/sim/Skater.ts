@@ -54,6 +54,11 @@ export interface SkaterTuning {
   /** px/s of the softest (short) and firmest (long) pass; a future passing stat */
   passMinSpeed: number;
   passMaxSpeed: number;
+  /**
+   * 0..1: how hard this Pokémon is to beat in a faceoff. Against an opposing center, it narrows the
+   * green zone the player has to stop the bar in (see faceoff.ts). A future stat.
+   */
+  faceoffSkill: number;
 }
 
 /** One point on a shot power curve: holding shoot for `seconds` gives `power` (0..1). */
@@ -90,6 +95,7 @@ export const DEFAULT_SKATER_TUNING: SkaterTuning = {
   chargingMoveScale: 0.55,
   passMinSpeed: 500,
   passMaxSpeed: 800,
+  faceoffSkill: 0.5,
 };
 
 /** Which side a skater plays for. */

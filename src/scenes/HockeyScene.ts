@@ -14,15 +14,16 @@ import {
   type SkaterControls,
   type SwitchMode,
 } from '../sim/HockeyEngine';
-import { assignStartingSpots, OPENING_FACEOFF_TEAM } from '../sim/formation';
+import { assignStartingSpots, FACEOFF_LAYOUTS, type FaceoffLayout } from '../sim/formation';
 import { MATCH_PHASE_RULES } from '../sim/matchPhase';
+import type { FaceoffStage } from '../sim/faceoff';
 import { Skater, type PlayingPosition, type Team } from '../sim/Skater';
 import { clamp, lerpVec, type CircleBody, type Vec2 } from '../sim/geometry';
 import { getShotPower } from '../sim/shotCharge';
 import { CameraController, CAMERA_TUNING } from './CameraController';
 import { PAUSE_KEYS, PAUSE_SCENE_KEY, type PauseMenuData, type PauseMenuOption } from './PauseScene';
 import { PUCK_RADIUS } from '../sim/Puck';
-import { CENTER_DOT, FACEOFF_DOT_POSITIONS, RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RINK_WIDTH } from '../sim/rink';
+import { CENTER_DOT, FACEOFF_DOT_POSITIONS, type FaceoffDot, RINK_BACKGROUND_KEY, RINK_BACKGROUND_PATH, RINK_HEIGHT, RINK_WIDTH } from '../sim/rink';
 
 /**
  * Who plays, for which team, and at which playing position; the first is the one the player
@@ -68,11 +69,39 @@ const PERIOD_NAMES = ['1ST', '2ND', '3RD'];
 /** Panel behind the period-end and game-over screen (px). */
 const SCREEN_PANEL_WIDTH = 760;
 const SCREEN_PANEL_HEIGHT = 210;
+/** Testing keys that jump to a faceoff at each of the five circles. */
+const TEST_FACEOFF_KEYS: { key: string; dot: FaceoffDot }[] = [
+  { key: 'ONE', dot: 'center' },
+  { key: 'TWO', dot: 'leftEndUpper' },
+  { key: 'THREE', dot: 'leftEndLower' },
+  { key: 'FOUR', dot: 'rightEndUpper' },
+  { key: 'FIVE', dot: 'rightEndLower' },
+];
+const FACEOFF_LAYOUT_LABELS: Record<FaceoffLayout, string> = {
+  hashMarks: 'hash marks',
+  box: 'box',
+  diamond: 'diamond',
+};
 /** Choices for the "Period length" option (s). */
 const PERIOD_LENGTH_CHOICES = [30, 60, 120, 180, 300];
 /** Countdown numbers sit above the center dot so the respawned puck stays visible. */
 const COUNTDOWN_Y = RINK_HEIGHT / 2 - 150;
-/** How long "GO!" shows after the countdown (ms). */
+/** Faceoff timing bar, drawn on the ice above the dot (px). */
+const FACEOFF_BAR_WIDTH = 180;
+const FACEOFF_BAR_HEIGHT = 14;
+const FACEOFF_BAR_ABOVE_DOT = 62;
+/** Length of the faceoff aiming arrow from the dot (px). */
+const FACEOFF_ARROW_LENGTH = 115;
+/** On-screen prompt for each stage of the faceoff draw; `winner` is set once the bar has stopped. */
+const FACEOFF_PROMPTS: Record<FaceoffStage, (winner?: Team) => string> = {
+  getSet: () => 'FACEOFF',
+  timing: () => 'Click to stop in the green!',
+  timingResult: (winner) => (winner === 'player' ? 'WON THE DRAW!' : 'LOST THE DRAW'),
+  aiming: () => 'Click to send the puck!',
+  aimingResult: () => '',
+  dropped: () => '',
+};
+/** How long "GO!" shows once the puck is live after a faceoff (ms). */
 const GO_FLASH_MS = 700;
 /** How long the puck takes to pop in when it respawns (ms). */
 const PUCK_RESPAWN_POP_MS = 300;
@@ -163,8 +192,12 @@ export class HockeyScene extends Phaser.Scene {
   private scoreTexts!: Record<Team, Phaser.GameObjects.Text>;
   /** Under the scoreboard: "GOAL!" in the scorer's color after a goal, "WHISTLE" during a stoppage. */
   private phaseBanner!: Phaser.GameObjects.Text;
-  /** Big 3-2-1 at every faceoff, then "GO!". */
+  /** Big "GO!" once a faceoff's puck is live. */
   private countdownText!: Phaser.GameObjects.Text;
+  /** Faceoff draw on the ice at the dot: timing bar and aiming arrow. */
+  private faceoffGraphics!: Phaser.GameObjects.Graphics;
+  /** What to do during the faceoff draw, and how it went. */
+  private faceoffText!: Phaser.GameObjects.Text;
   /** Period and game clock, in a box under the scores. */
   private clockText!: Phaser.GameObjects.Text;
   /** Screen over center ice at period end and game over: a panel, a big title and a subtitle. */
@@ -227,7 +260,7 @@ export class HockeyScene extends Phaser.Scene {
 
     this.add.image(0, 0, RINK_BACKGROUND_KEY).setOrigin(0, 0);
 
-    const startingSpots = assignStartingSpots(LINEUP, OPENING_FACEOFF_TEAM);
+    const startingSpots = assignStartingSpots(LINEUP);
     const skaters = LINEUP.map(({ species, team, playingPosition }, index) => {
       const { position, facing } = startingSpots[index];
       const skater = new Skater(position, team, playingPosition, species.tuning);
@@ -248,6 +281,7 @@ export class HockeyScene extends Phaser.Scene {
     this.puckSprite = this.drawPuck();
     // Above the skaters: aiming back across them must still show the line.
     this.aimGraphics = this.add.graphics().setDepth(AIM_DEPTH);
+    this.faceoffGraphics = this.add.graphics().setDepth(AIM_DEPTH);
     this.controlPointer = this.drawControlPointer(TEAM_COLORS.player).setDepth(RING_DEPTH);
     this.syncSprites();
 
@@ -256,6 +290,8 @@ export class HockeyScene extends Phaser.Scene {
     keyboard.on('keydown-R', () => this.engine.resetPuck());
     // Temporary testing key: blow the whistle for a stoppage until real causes (puck out of play, etc.) exist.
     keyboard.on('keydown-B', () => this.engine.callStoppage('whistle'));
+    // Temporary testing keys: 1-5 jump straight to a faceoff at each circle.
+    TEST_FACEOFF_KEYS.forEach(({ key, dot }) => keyboard.on(`keydown-${key}`, () => this.engine.startFaceoffAt(dot)));
     keyboard.addCapture('SPACE');
     keyboard.on('keydown-SPACE', () => {
       this.engine.switchControlledSkater(this.switchMode, this.getPointerWorldPosition(), this.teammateMarkerPoints);
@@ -347,6 +383,14 @@ export class HockeyScene extends Phaser.Scene {
           const current = PERIOD_LENGTH_CHOICES.indexOf(this.engine.rules.periodSeconds);
           // Restarts this period's clock at the new length.
           this.engine.setPeriodLength(PERIOD_LENGTH_CHOICES[(current + 1) % PERIOD_LENGTH_CHOICES.length]);
+        },
+      },
+      {
+        label: 'Faceoff layout',
+        value: () => FACEOFF_LAYOUT_LABELS[this.engine.faceoffLayout],
+        change: () => {
+          const next = (FACEOFF_LAYOUTS.indexOf(this.engine.faceoffLayout) + 1) % FACEOFF_LAYOUTS.length;
+          this.engine.setFaceoffLayout(FACEOFF_LAYOUTS[next]);
         },
       },
       {
@@ -653,6 +697,21 @@ export class HockeyScene extends Phaser.Scene {
         .setDepth(HUD_DEPTH)
         .setVisible(false),
     );
+    this.faceoffText = this.addToHud(
+      this.add
+        .text(centerX, COUNTDOWN_Y, '', {
+          fontFamily: 'monospace',
+          fontSize: '40px',
+          fontStyle: 'bold',
+          color: '#ffffff',
+          stroke: '#0b1220',
+          strokeThickness: 8,
+          align: 'center',
+        })
+        .setOrigin(0.5)
+        .setDepth(HUD_DEPTH)
+        .setVisible(false),
+    );
     this.screenPanel = this.addToHud(this.add.graphics().setDepth(HUD_DEPTH).setVisible(false));
     this.screenPanel.fillStyle(0x0b1220, 0.8);
     this.screenPanel.fillRoundedRect(
@@ -740,22 +799,101 @@ export class HockeyScene extends Phaser.Scene {
     }
   }
 
-  /** 3-2-1 while everyone waits at a faceoff, then a short "GO!" once the puck is live. */
+  /** Faceoff prompts and results while the draw is played, then a short "GO!" once the puck is live. */
   private updateCountdown(): void {
-    const { phase } = this.engine;
+    const { phase, faceoffDraw } = this.engine;
 
     if (this.lastPhase === 'faceoff' && phase === 'live') {
       this.goFlashUntil = this.time.now + GO_FLASH_MS;
     }
 
     this.lastPhase = phase;
+    this.drawFaceoff();
 
-    if (phase === 'faceoff') {
-      this.countdownText.setText(String(Math.ceil(this.engine.countdownRemaining))).setVisible(true);
-    } else if (this.time.now < this.goFlashUntil) {
+    if (phase === 'faceoff' && faceoffDraw) {
+      this.countdownText.setVisible(false);
+      this.faceoffText.setText(FACEOFF_PROMPTS[faceoffDraw.stage](faceoffDraw.winner)).setVisible(true);
+      return;
+    }
+
+    this.faceoffText.setVisible(false);
+
+    if (this.time.now < this.goFlashUntil) {
       this.countdownText.setText('GO!').setVisible(true);
     } else {
       this.countdownText.setVisible(false);
+    }
+  }
+
+  /**
+   * The faceoff draw on the ice at the dot: the timing bar above it (green zone, moving marker)
+   * and, if the player won, the spinning arrow around it.
+   */
+  private drawFaceoff(): void {
+    const graphics = this.faceoffGraphics;
+    graphics.clear();
+
+    const { phase, faceoffDraw: draw, faceoffDot } = this.engine;
+
+    if (phase !== 'faceoff' || !draw) {
+      return;
+    }
+
+    const dot = FACEOFF_DOT_POSITIONS[faceoffDot];
+
+    if (draw.stage === 'timing' || draw.stage === 'timingResult') {
+      const left = dot.x - FACEOFF_BAR_WIDTH / 2;
+      const top = dot.y - FACEOFF_BAR_ABOVE_DOT - FACEOFF_BAR_HEIGHT / 2;
+      const resultColor = draw.winner === 'player' ? 0x3ddc6e : 0xff3b2b;
+
+      graphics.fillStyle(0x0b1220, 0.85);
+      graphics.fillRoundedRect(left - 4, top - 4, FACEOFF_BAR_WIDTH + 8, FACEOFF_BAR_HEIGHT + 8, 6);
+      graphics.fillStyle(0x5a6070, 1);
+      graphics.fillRect(left, top, FACEOFF_BAR_WIDTH, FACEOFF_BAR_HEIGHT);
+      graphics.fillStyle(0x3ddc6e, 1);
+      graphics.fillRect(
+        left + draw.greenStart * FACEOFF_BAR_WIDTH,
+        top,
+        (draw.greenEnd - draw.greenStart) * FACEOFF_BAR_WIDTH,
+        FACEOFF_BAR_HEIGHT,
+      );
+
+      if (draw.stage === 'timingResult') {
+        graphics.lineStyle(3, resultColor, 1);
+        graphics.strokeRect(left - 4, top - 4, FACEOFF_BAR_WIDTH + 8, FACEOFF_BAR_HEIGHT + 8);
+      }
+
+      const markerX = left + draw.barPosition * FACEOFF_BAR_WIDTH;
+      graphics.fillStyle(0xffffff, 1);
+      graphics.fillRect(markerX - 2, top - 6, 4, FACEOFF_BAR_HEIGHT + 12);
+    }
+
+    if (draw.winner === 'player' && (draw.stage === 'aiming' || draw.stage === 'aimingResult')) {
+      const angle = draw.arrowAngle;
+      const tip = { x: dot.x + Math.cos(angle) * FACEOFF_ARROW_LENGTH, y: dot.y + Math.sin(angle) * FACEOFF_ARROW_LENGTH };
+      const headBase = (offset: number, extra = 0) => ({
+        x: tip.x - Math.cos(angle) * (24 + extra) + Math.cos(angle + Math.PI / 2) * offset,
+        y: tip.y - Math.sin(angle) * (24 + extra) + Math.sin(angle + Math.PI / 2) * offset,
+      });
+      // The shaft stops at the head so the outline doesn't poke through it.
+      const shaftEnd = headBase(0);
+
+      graphics.lineStyle(3, 0xffffff, 0.5);
+      graphics.strokeCircle(dot.x, dot.y, FACEOFF_ARROW_LENGTH);
+      // Dark outline first, then the yellow arrow on top, so it reads over the Pokémon.
+      graphics.lineStyle(12, 0x0b1220, 0.9);
+      graphics.lineBetween(dot.x, dot.y, shaftEnd.x, shaftEnd.y);
+      graphics.fillStyle(0x0b1220, 0.9);
+      const outlineTip = { x: tip.x + Math.cos(angle) * 4, y: tip.y + Math.sin(angle) * 4 };
+      const outlineLeft = headBase(-17, 3);
+      const outlineRight = headBase(17, 3);
+      graphics.fillTriangle(outlineTip.x, outlineTip.y, outlineLeft.x, outlineLeft.y, outlineRight.x, outlineRight.y);
+      graphics.lineStyle(7, 0xffe14d, 1);
+      graphics.lineBetween(dot.x, dot.y, shaftEnd.x, shaftEnd.y);
+      graphics.fillStyle(0xffe14d, 1);
+      const left = headBase(-13);
+      const right = headBase(13);
+      graphics.fillTriangle(tip.x, tip.y, left.x, left.y, right.x, right.y);
     }
   }
 
@@ -775,8 +913,8 @@ export class HockeyScene extends Phaser.Scene {
     this.helpText.setText(
       `${MOVEMENT_SCHEME_HELP[this.movementScheme]}   ` +
         'Mouse: aim   Left click: shoot (hold to charge)   Right click: pass\n' +
-        'Space: switch player (without the puck)   R: reset puck (testing)   B: whistle (testing)   ' +
-        'Esc/P: pause (Options: controls, camera)',
+        'Space: switch player (without the puck)   Esc/P: pause (Options: controls, camera, faceoff layout)\n' +
+        'Testing: R reset puck   B whistle   1-5 faceoff at center / upper-left / lower-left / upper-right / lower-right',
     );
   }
 

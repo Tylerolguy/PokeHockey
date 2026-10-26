@@ -87,6 +87,8 @@ interface CheckState {
   /** Unit direction the dash was aimed at when it started. */
   direction: Vec2;
   elapsed: number;
+  /** Whether this check has hit someone yet (each check hits at most once). */
+  hit: boolean;
 }
 
 /** One point on a shot power curve: holding shoot for `seconds` gives `power` (0..1). */
@@ -174,6 +176,13 @@ export class Skater implements CircleBody {
   private check?: CheckState;
   /** Seconds until another check can start. */
   private checkCooldown = 0;
+  /** Seconds left flinched: stopped and unable to skate, shoot, pass or check (see checking.ts). */
+  private flinchSeconds = 0;
+  private flinchStopDeceleration = 0;
+  /** Seconds left in which hitting the boards counts as being checked into them. */
+  private checkedSeconds = 0;
+  /** True if the skater hit the boards during the current simulation step. */
+  public hitBoards = false;
 
   constructor(
     start: Vec2,
@@ -205,6 +214,53 @@ export class Skater implements CircleBody {
     return this.check !== undefined;
   }
 
+  /** The current check's direction while it's dashing and hasn't hit anyone yet, else undefined. */
+  get unspentCheckDirection(): Vec2 | undefined {
+    return this.isDashing && !this.check!.hit ? this.check!.direction : undefined;
+  }
+
+  /** True while a check is going that hasn't hit anyone: crashing into the boards now is a miss. */
+  get isMissingCheck(): boolean {
+    return this.check !== undefined && !this.check.hit;
+  }
+
+  /** Marks the current check as having hit someone, so it can't hit again. */
+  markCheckHit(): void {
+    if (this.check) {
+      this.check.hit = true;
+    }
+  }
+
+  get isFlinched(): boolean {
+    return this.flinchSeconds > 0;
+  }
+
+  /**
+   * Takes away the skater's control for `seconds`, stopping it at `stopDeceleration` px/s²; any
+   * check in progress ends.
+   */
+  flinch(seconds: number, stopDeceleration: number): void {
+    this.flinchSeconds = Math.max(this.flinchSeconds, seconds);
+    this.flinchStopDeceleration = stopDeceleration;
+    this.check = undefined;
+    this.shotCharge = undefined;
+  }
+
+  /** Just checked: for the next `seconds`, hitting the boards counts as being checked into them. */
+  markChecked(seconds: number): void {
+    this.checkedSeconds = seconds;
+  }
+
+  /** True while hitting the boards would count as being checked into them. */
+  get wasJustChecked(): boolean {
+    return this.checkedSeconds > 0;
+  }
+
+  /** Ends the checked-into-the-boards window, once it's been rolled for. */
+  clearChecked(): void {
+    this.checkedSeconds = 0;
+  }
+
   /**
    * Starts a check: a short dash along unit vector `direction`, handled per `style`. The skater
    * turns to face it. Refused (returns false) while one is going or cooling down.
@@ -214,7 +270,11 @@ export class Skater implements CircleBody {
       return false;
     }
 
-    this.check = { style, direction: { ...direction }, elapsed: 0 };
+    if (this.isFlinched) {
+      return false;
+    }
+
+    this.check = { style, direction: { ...direction }, elapsed: 0, hit: false };
     this.checkCooldown = this.tuning.checkCooldownSeconds;
     this.setFacing(direction.x, direction.y);
 
@@ -232,8 +292,15 @@ export class Skater implements CircleBody {
    * lowers them further. During a check's dash, input is ignored and the dash drives the skater.
    */
   update(input: Vec2, deltaSeconds: number, moveScale = 1): void {
+    this.hitBoards = false;
     this.checkCooldown = Math.max(0, this.checkCooldown - deltaSeconds);
+    this.checkedSeconds = Math.max(0, this.checkedSeconds - deltaSeconds);
     this.advanceCheck(deltaSeconds);
+
+    if (this.isFlinched) {
+      this.stepFlinched(deltaSeconds);
+      return;
+    }
 
     if (this.isDashing) {
       this.stepDash(deltaSeconds);
@@ -320,15 +387,31 @@ export class Skater implements CircleBody {
     this.collideWithRink();
   }
 
-  /** Ends any check and its cooldown at once, e.g. when lining up for a faceoff. */
+  /** Ends any check, its cooldown and any flinch at once, e.g. when lining up for a faceoff. */
   cancelCheck(): void {
     this.check = undefined;
     this.checkCooldown = 0;
+    this.flinchSeconds = 0;
+    this.checkedSeconds = 0;
   }
 
+  /** Keeps the skater inside the boards and out of the nets; hitting the boards sets `hitBoards`. */
   collideWithRink(): void {
-    containInRoundedRect(this, RINK_ICE, BOARD_RESTITUTION);
+    if (containInRoundedRect(this, RINK_ICE, BOARD_RESTITUTION)) {
+      this.hitBoards = true;
+    }
+
     RINK_NETS.forEach((net) => pushOutOfRect(this, net, NET_RESTITUTION));
+  }
+
+  /** Flinched: no input; the skater stops hard, and can still be shoved around. */
+  private stepFlinched(deltaSeconds: number): void {
+    this.flinchSeconds = Math.max(0, this.flinchSeconds - deltaSeconds);
+    this.applyFriction(this.flinchStopDeceleration * deltaSeconds);
+    this.limitSpeed(this.tuning.maxSpeed);
+    this.position.x += this.velocity.x * deltaSeconds;
+    this.position.y += this.velocity.y * deltaSeconds;
+    this.collideWithRink();
   }
 
   /** Acceleration fades linearly from `accelerationFromStop` to `accelerationAtMaxSpeed` as speed builds. */

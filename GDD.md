@@ -207,7 +207,12 @@ The current default is the "mouse-facing" movement scheme.
   - **Commit (default):** full speed at once, locked on the line you clicked toward.
   - **Carve:** reaches full speed in under 0.1 s along the facing, which keeps turning toward the mouse, so you can steer the dash.
 - **The look:** while dashing, fading afterimages in the team colour stream behind the Pokémon.
-- **Not built yet:** what a check does on contact (knocking Pokémon around, stealing the puck). Bumping into someone mid-dash is just the normal skater collision for now.
+- **What a check does** (`checking.ts`, numbers in `CHECK_TUNING`; placeholders until stats, rolled with the seeded random):
+  - **Hit:** a dashing Pokémon touching an opponent checks them (once per check). The checked one drops the puck 30% of the time; it slides off at 160 px/s in the direction of the check.
+  - **Checked into the wall:** if the checked one hits the boards within 0.4 s, one 80% roll: on success they drop the puck (toward open ice) and are flinched.
+  - **Missed check:** a checker who hits the boards during their check (dash or the slowdown after it) without having hit anyone crashed, and is flinched.
+  - **Flinched:** for 1 s the Pokémon can't skate, shoot, pass or check; it stops hard (1800 px/s²) but can still be shoved. Yellow stars circle over its head.
+- **Not built yet:** extra knockback from checks (the checked one is pushed only by the normal mass-weighted collision, so "into the wall" needs them near the boards), and poke checks.
 
 ### Puck and Possession
 

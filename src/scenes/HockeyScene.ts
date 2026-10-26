@@ -90,6 +90,12 @@ const COUNTDOWN_Y = RINK_HEIGHT / 2 - 150;
 const DASH_AFTERIMAGE_INTERVAL_MS = 30;
 const DASH_AFTERIMAGE_ALPHA = 0.55;
 const DASH_AFTERIMAGE_FADE_MS = 220;
+/** Flinched stars: how many, their size and orbit (px), how high above the skater's center (px), and spin (rad/s). */
+const FLINCH_STAR_COUNT = 3;
+const FLINCH_STAR_SIZE = 7;
+const FLINCH_STAR_ORBIT = 18;
+const FLINCH_STAR_HEIGHT = 50;
+const FLINCH_STAR_SPIN = 6;
 const CHECK_STYLE_LABELS: Record<CheckStyle, string> = {
   commit: 'commit (locked line)',
   carve: 'carve (steer with mouse)',
@@ -202,6 +208,8 @@ export class HockeyScene extends Phaser.Scene {
   private phaseBanner!: Phaser.GameObjects.Text;
   /** Big "GO!" once a faceoff's puck is live. */
   private countdownText!: Phaser.GameObjects.Text;
+  /** Stars circling over flinched Pokémon. */
+  private flinchGraphics!: Phaser.GameObjects.Graphics;
   /** Faceoff draw on the ice at the dot: timing bar and aiming arrow. */
   private faceoffGraphics!: Phaser.GameObjects.Graphics;
   /** What to do during the faceoff draw, and how it went. */
@@ -295,6 +303,7 @@ export class HockeyScene extends Phaser.Scene {
     // Above the skaters: aiming back across them must still show the line.
     this.aimGraphics = this.add.graphics().setDepth(AIM_DEPTH);
     this.faceoffGraphics = this.add.graphics().setDepth(AIM_DEPTH);
+    this.flinchGraphics = this.add.graphics().setDepth(AIM_DEPTH);
     this.controlPointer = this.drawControlPointer(TEAM_COLORS.player).setDepth(RING_DEPTH);
     this.syncSprites();
 
@@ -976,6 +985,7 @@ export class HockeyScene extends Phaser.Scene {
     this.drawAim(controls.aim);
     this.syncSprites();
     this.leaveDashAfterimages();
+    this.drawFlinchStars();
     this.updateCamera(deltaMs / 1000);
     this.updatePuckIndicator();
     this.updateTeammateIndicators();
@@ -1000,6 +1010,29 @@ export class HockeyScene extends Phaser.Scene {
 
     const puckPosition = this.getDrawPosition(puck);
     this.puckSprite.setPosition(puckPosition.x, puckPosition.y).setDepth(ON_ICE_BASE_DEPTH + puckPosition.y);
+  }
+
+  /** Stars circling over the head of every flinched Pokémon. */
+  private drawFlinchStars(): void {
+    const graphics = this.flinchGraphics;
+    graphics.clear();
+    const spin = (this.time.now / 1000) * FLINCH_STAR_SPIN;
+
+    this.skaterSprites.forEach((_, skater) => {
+      if (!skater.isFlinched) {
+        return;
+      }
+
+      const head = this.getDrawPosition(skater);
+
+      for (let i = 0; i < FLINCH_STAR_COUNT; i++) {
+        const angle = spin + (i * Math.PI * 2) / FLINCH_STAR_COUNT;
+        // A flattened ring, as if seen from above at an angle.
+        const x = head.x + Math.cos(angle) * FLINCH_STAR_ORBIT;
+        const y = head.y - FLINCH_STAR_HEIGHT + Math.sin(angle) * FLINCH_STAR_ORBIT * 0.4;
+        drawStar(graphics, x, y, FLINCH_STAR_SIZE);
+      }
+    });
   }
 
   /**
@@ -1188,6 +1221,22 @@ function getPowerColor(power: number): number {
   }
 
   return stops[stops.length - 1].color;
+}
+
+/** A small yellow five-pointed star with a dark outline, centered on (x, y), `size` px to its tips. */
+function drawStar(graphics: Phaser.GameObjects.Graphics, x: number, y: number, size: number): void {
+  const points: Phaser.Math.Vector2[] = [];
+
+  for (let i = 0; i < 10; i++) {
+    const radius = i % 2 === 0 ? size : size * 0.45;
+    const angle = -Math.PI / 2 + (i * Math.PI) / 5;
+    points.push(new Phaser.Math.Vector2(x + Math.cos(angle) * radius, y + Math.sin(angle) * radius));
+  }
+
+  graphics.fillStyle(0xffe14d, 1);
+  graphics.fillPoints(points, true);
+  graphics.lineStyle(1.5, 0x0b1220, 0.9);
+  graphics.strokePoints(points, true);
 }
 
 /** "1ST", "2ND", "3RD", then plain numbers for any later period. */

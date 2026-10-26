@@ -1,5 +1,6 @@
 import { clamp, clampDirectionToArcs, resolveCircleCollision, wrapAngle, type Vec2 } from './geometry';
 import { chasePuckControls, idleControls } from './PlayerAI';
+import { CHECK_TUNING } from './checking';
 import { FACEOFF_TUNING, FaceoffDraw } from './faceoff';
 import { Puck } from './Puck';
 import {
@@ -35,6 +36,8 @@ const MAX_FRAME_SECONDS = 0.1;
 const PASS_FULL_SPEED_DISTANCE = 700;
 /** How much of its speed (into the Pokémon) a shot keeps when it deflects off one. */
 const SHOT_DEFLECT_RESTITUTION = 0.6;
+/** A dashing skater counts as touching someone (a check) within this much (px) of their edges meeting. */
+const CHECK_CONTACT_SLOP = 2;
 /** How bouncy skater-on-skater hits are. */
 const SKATER_RESTITUTION = 0.3;
 /** After a goal, how close to their starting spot (px) and how slow (px/s) a skater must be to count as home. */
@@ -443,10 +446,79 @@ export class HockeyEngine {
       const { direction, moveScale } = this.steer(skater, move, aim, deltaSeconds);
       skater.update(direction, deltaSeconds, moveScale);
     });
+    // Checks are found while skaters still overlap, before collisions push them apart; board
+    // crashes after, since being shoved can be what puts someone into the boards.
+    this.resolveCheckHits();
     this.resolveSkaterCollisions();
+    this.resolveBoardCrashes();
     this.updatePossession();
     this.puck.update(deltaSeconds);
     this.checkForGoal();
+  }
+
+  /**
+   * A dashing skater touching an opponent checks them (once per check): the checked one may drop
+   * the puck, and for a moment hitting the boards counts as being checked into them.
+   */
+  private resolveCheckHits(): void {
+    for (const checker of this.skaters) {
+      const direction = checker.unspentCheckDirection;
+
+      if (!direction) {
+        continue;
+      }
+
+      const victim = this.skaters.find(
+        (other) =>
+          other.team !== checker.team &&
+          Math.hypot(other.position.x - checker.position.x, other.position.y - checker.position.y) <=
+            other.radius + checker.radius + CHECK_CONTACT_SLOP,
+      );
+
+      if (!victim) {
+        continue;
+      }
+
+      checker.markCheckHit();
+      victim.markChecked(CHECK_TUNING.intoBoardsWindowSeconds);
+
+      if (this.puck.carrier === victim && this.random() < CHECK_TUNING.dropChanceOnHit) {
+        this.dropPuck(direction);
+      }
+    }
+  }
+
+  /**
+   * Hitting the boards during a check that hasn't hit anyone is a crash: flinched. Hitting them
+   * just after being checked is being checked into them: one roll to drop the puck and be flinched.
+   */
+  private resolveBoardCrashes(): void {
+    for (const skater of this.skaters) {
+      if (!skater.hitBoards) {
+        continue;
+      }
+
+      if (skater.isMissingCheck) {
+        skater.flinch(CHECK_TUNING.flinchSeconds, CHECK_TUNING.flinchStopDeceleration);
+      } else if (skater.wasJustChecked) {
+        skater.clearChecked();
+
+        if (this.random() < CHECK_TUNING.intoBoardsChance) {
+          skater.flinch(CHECK_TUNING.flinchSeconds, CHECK_TUNING.flinchStopDeceleration);
+
+          if (this.puck.carrier === skater) {
+            // Squirts back off the boards toward open ice.
+            this.dropPuck(this.getDirectionTo(skater, CENTER_DOT));
+          }
+        }
+      }
+    }
+  }
+
+  /** Knocks the puck loose from its carrier, sliding off along unit vector `direction`. */
+  private dropPuck(direction: Vec2): void {
+    this.puck.carrier!.shotCharge = undefined;
+    this.puck.release({ x: direction.x * CHECK_TUNING.dropSpeed, y: direction.y * CHECK_TUNING.dropSpeed });
   }
 
   /**
@@ -641,6 +713,12 @@ export class HockeyEngine {
     this.wasPassHeld = controls.pass;
     const checkPressed = Boolean(controls.check) && !this.wasCheckHeld;
     this.wasCheckHeld = Boolean(controls.check);
+
+    // Flinched: no shooting, passing or checking until it wears off.
+    if (skater.isFlinched) {
+      skater.shotCharge = undefined;
+      return;
+    }
 
     if (this.puck.carrier !== skater) {
       skater.shotCharge = undefined;
